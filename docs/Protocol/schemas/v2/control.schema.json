@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "properties": {
+    "type": { "enum": ["CLIPBOARD_ACK", "PING", "PONG", "UNPAIR", "UNPAIR_ACK", "ERROR"] },
+    "clip_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "status": { "enum": ["ready", "applied", "duplicate", "skipped", "unsupported", "invalid"] },
+    "sent_at_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "reply_to": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "revocation_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "revoked_at_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "reason": { "const": "user_request" },
+    "code": { "type": "string", "pattern": "^[a-z0-9_]{1,48}$" },
+    "detail": { "type": "string" }
+  },
+  "oneOf": [
+    { "properties": { "type": { "const": "CLIPBOARD_ACK" } }, "required": ["clip_id", "status"] },
+    { "properties": { "type": { "const": "PING" } }, "required": ["sent_at_ms"] },
+    { "properties": { "type": { "const": "PONG" } }, "required": ["reply_to"] },
+    { "properties": { "type": { "const": "UNPAIR" } }, "required": ["revocation_id", "revoked_at_ms"] },
+    { "properties": { "type": { "const": "UNPAIR_ACK" } }, "required": ["revocation_id"] },
+    { "properties": { "type": { "const": "ERROR" } }, "required": ["code", "detail"] }
+  ]
+}

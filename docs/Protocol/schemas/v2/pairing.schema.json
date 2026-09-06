@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "properties": {
+    "type": { "enum": ["PAIR_REQUEST", "PAIR_CHALLENGE", "PAIR_CONFIRM", "PAIR_STATUS", "PAIR_COMPLETE", "PAIR_REJECT"] },
+    "request_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "initiator_nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "acceptor_nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "transcript_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state": { "enum": ["confirmed", "complete"] },
+    "reason": { "enum": ["user_rejected", "timeout", "peer_limit", "pairing_disabled", "already_paired", "invalid_request"] }
+  },
+  "required": ["request_id"],
+  "oneOf": [
+    { "properties": { "type": { "const": "PAIR_REQUEST" } }, "required": ["initiator_nonce"] },
+    { "properties": { "type": { "const": "PAIR_CHALLENGE" } }, "required": ["acceptor_nonce"] },
+    { "properties": { "type": { "const": "PAIR_CONFIRM" } }, "required": ["transcript_sha256"] },
+    { "properties": { "type": { "const": "PAIR_STATUS" } }, "required": ["transcript_sha256", "state"] },
+    { "properties": { "type": { "const": "PAIR_COMPLETE" } }, "required": ["transcript_sha256"] },
+    { "properties": { "type": { "const": "PAIR_REJECT" } }, "required": ["reason"] }
+  ]
+}

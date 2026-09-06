@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": ["device_id", "device_name", "platform", "capabilities", "certificate_sha256", "session_nonce"],
+  "properties": {
+    "type": { "const": "HELLO" },
+    "device_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "device_name": { "type": "string", "minLength": 1 },
+    "platform": { "type": "string", "pattern": "^[a-z0-9._-]{1,16}$" },
+    "capabilities": { "const": ["clip.text.utf8"] },
+    "certificate_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "session_nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+  }
+}

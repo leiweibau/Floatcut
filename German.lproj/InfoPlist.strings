@@ -1,0 +1,2 @@
+"NSAppleEventsUsageDescription" = "Floatcut benötigt diese Berechtigung, um Text in andere Anwendungen einzufügen und sich selbst zu den Anmeldeobjekten hinzuzufügen, damit es beim Login gestartet werden kann.";
+"NSLocalNetworkUsageDescription" = "Floatcut verwendet das lokale Netzwerk, um Geräte zu finden und Zwischenablagetexte ausschließlich mit ausdrücklich gekoppelten Geräten sicher zu synchronisieren.";

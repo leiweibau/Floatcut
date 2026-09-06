@@ -1,0 +1,50 @@
+{
+  "description": "One complete 1x1 PNG transfer; frame prefixes are intentionally not embedded.",
+  "decoded_image_sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+  "messages": [
+    {
+      "v": 2,
+      "type": "CLIPBOARD_IMAGE_BEGIN",
+      "message_id": "01234567-89ab-4cde-8f01-23456789abcd",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde",
+      "source_device_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "created_at_ms": 1788253200000,
+      "content_type": "image/png",
+      "byte_size": 68,
+      "content_sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+      "chunk_size": 49152,
+      "chunk_count": 1,
+      "hop_count": 0
+    },
+    {
+      "v": 2,
+      "type": "CLIPBOARD_ACK",
+      "message_id": "11111111-2222-4333-8444-555555555555",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde",
+      "status": "ready"
+    },
+    {
+      "v": 2,
+      "type": "CLIPBOARD_IMAGE_CHUNK",
+      "message_id": "22222222-3333-4444-8555-666666666666",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde",
+      "chunk_index": 0,
+      "data_size": 68,
+      "data_sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk-A8AAQUBAScY42YAAAAASUVORK5CYII"
+    },
+    {
+      "v": 2,
+      "type": "CLIPBOARD_IMAGE_COMMIT",
+      "message_id": "33333333-4444-4555-8666-777777777777",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde"
+    },
+    {
+      "v": 2,
+      "type": "CLIPBOARD_ACK",
+      "message_id": "44444444-5555-4666-8777-888888888888",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde",
+      "status": "applied"
+    }
+  ]
+}

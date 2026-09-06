@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "if": {
+        "properties": {
+          "type": { "const": "CLIPBOARD_IMAGE_BEGIN" },
+          "content_type": { "const": "image/png" }
+        },
+        "required": ["type", "content_type"]
+      },
+      "then": { "properties": { "byte_size": { "minimum": 8 } } }
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "type": { "enum": ["CLIPBOARD_IMAGE_BEGIN", "CLIPBOARD_IMAGE_CHUNK", "CLIPBOARD_IMAGE_COMMIT", "CLIPBOARD_IMAGE_ABORT"] },
+    "clip_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "source_device_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "created_at_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "content_type": { "enum": ["image/png", "image/jpeg"] },
+    "byte_size": { "type": "integer", "minimum": 3, "maximum": 16777216 },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "chunk_size": { "const": 49152 },
+    "chunk_count": { "type": "integer", "minimum": 1, "maximum": 342 },
+    "hop_count": { "const": 0 },
+    "chunk_index": { "type": "integer", "minimum": 0, "maximum": 341 },
+    "data_size": { "type": "integer", "minimum": 1, "maximum": 49152 },
+    "data_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "data": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 65536 },
+    "reason": { "enum": ["sender_cancelled", "timeout", "io_error"] }
+  },
+  "required": ["clip_id"],
+  "oneOf": [
+    {
+      "properties": { "type": { "const": "CLIPBOARD_IMAGE_BEGIN" } },
+      "required": ["source_device_id", "created_at_ms", "content_type", "byte_size", "content_sha256", "chunk_size", "chunk_count", "hop_count"]
+    },
+    {
+      "properties": { "type": { "const": "CLIPBOARD_IMAGE_CHUNK" } },
+      "required": ["chunk_index", "data_size", "data_sha256", "data"]
+    },
+    { "properties": { "type": { "const": "CLIPBOARD_IMAGE_COMMIT" } } },
+    { "properties": { "type": { "const": "CLIPBOARD_IMAGE_ABORT" } } }
+  ]
+}

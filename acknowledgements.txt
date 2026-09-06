@@ -1,0 +1,30 @@
+Floatcut is based on Flycut, developed by General Arcade (http://www.generalarcade.com/). Flycut is a fork of Jumpcut. Original source code available on GitHub: http://github.com/TermiT/Flycut
+This fork was updated by haad to compile on Tahoe 26.0 release of Mac OS.
+Thanks to haad (https://github.com/haad), whose Flycut fork provided the foundation this application builds upon.
+
+Jumpcut development:
+Copyright © 2002 - 2019 by Steven Cook (Jumpcut)
+
+Flycut development:
+Copyright © 2011, General Arcade, Gennadiy Potapov, Adam Hamsik (Flycut)
+
+Floatcut development:
+Copyright © 2026 by Karsten Meier (Floatcut)
+
+Floatcut incorporates the following libraries, used with gratitude:
+	• ShortcutRecorder by Jesper et al. (http://wafflesoftware.net/)
+	• a modified version of UKPrefsPanel by Uli Kusterer (http://www.zathras.de/)
+	• SGHotKeysLib by Justin Williams (https://github.com/agilebits/SGHotKeysLib)
+
+Jumpcut is open source code built with open source code. Jumpcut incorporates the
+following libraries, used with gratitude:
+	• PTHotKey by Quentin Carnicelli (http://rogueamoeba.com/)
+	• ShortcutRecorder by Jesper et al. (http://wafflesoftware.net/)
+	• Sparkle by Andy Matuschak (http://www.andymatuschak.org/)
+	• a modified version of UKPrefsPanel by Uli Kusterer (http://www.zathras.de/) 
+
+Additionally, much of the original code for Jumpcut was derived from Brett Simmons' TigerLaunch (http://ranchero.com/tigerlaunch/) and constant referral to the examples and discussion at CocoaDev.com.
+
+Jumpcut is subject to the MIT License. Source code and license details are available at its homepage, (http://jumpcut.sourceforge.net).
+
+Thanks to Clare Bates Congdon, Joshua Davis, Brad Graham, David Jacobs, John Kenzie, Adam Rice, Finn Smith, Vera Tobin, and Andre Torrez for early and ongoing feedback, advice, and encouragement.
