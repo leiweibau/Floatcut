@@ -84,4 +84,4 @@ Copyright © 2002 - 2019 by Steven Cook (Jumpcut)<br>
 Copyright © 2011, General Arcade, Gennadiy Potapov, Adam Hamsik (Flycut)<br>
 Copyright © 2026 by Karsten Meier (Floatcut)
 
-Floatcut is released under the [MIT License](license.txt).
+Floatcut is released under the [MIT License](LICENSE).
