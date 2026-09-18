@@ -49,5 +49,26 @@ mkdir -p "${DIST_DIR}"
 ditto "${APP_PATH}" "${DIST_DIR}/Floatcut.app"
 
 lipo -info "${DIST_DIR}/Floatcut.app/Contents/MacOS/Floatcut"
-/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${DIST_DIR}/Floatcut.app/Contents/Info.plist"
+VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${DIST_DIR}/Floatcut.app/Contents/Info.plist")"
+if [[ ! "${VERSION}" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  echo "Invalid app version for DMG filename: ${VERSION}" >&2
+  exit 1
+fi
+echo "App version: ${VERSION}"
 /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${DIST_DIR}/Floatcut.app/Contents/Info.plist"
+
+DMG_NAME="Floatcut_universal_${VERSION}.dmg"
+DMG_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/floatcut-dmg.XXXXXX")"
+trap 'if [[ -n "${DMG_TEMP_DIR:-}" && -d "${DMG_TEMP_DIR}" ]]; then rm -rf -- "${DMG_TEMP_DIR}"; fi' EXIT
+mkdir -p "${DMG_TEMP_DIR}/contents"
+ditto "${DIST_DIR}/Floatcut.app" "${DMG_TEMP_DIR}/contents/Floatcut.app"
+ln -s /Applications "${DMG_TEMP_DIR}/contents/Applications"
+
+hdiutil create \
+  -volname "Floatcut" \
+  -srcfolder "${DMG_TEMP_DIR}/contents" \
+  -format UDZO \
+  "${DMG_TEMP_DIR}/${DMG_NAME}"
+hdiutil verify "${DMG_TEMP_DIR}/${DMG_NAME}"
+mv -f "${DMG_TEMP_DIR}/${DMG_NAME}" "${DIST_DIR}/${DMG_NAME}"
+echo "DMG: ${DIST_DIR}/${DMG_NAME}"

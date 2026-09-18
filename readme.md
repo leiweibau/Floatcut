@@ -60,7 +60,7 @@ Install Xcode, then create a universal Release app bundle in `dist/`:
 bash Scripts/package-app.sh
 ```
 
-The result is `dist/Floatcut.app`. The script uses the stable local `Floatcut Local Development` signing identity when available and otherwise falls back to ad-hoc signing. More details are available in [Release setup](docs/RELEASE_SETUP.md).
+The results are `dist/Floatcut.app` and `dist/Floatcut_universal_<version>.dmg` (currently `Floatcut_universal_4.0.dmg`). The script uses the stable local `Floatcut Local Development` signing identity when available and otherwise falls back to ad-hoc signing. More details are available in [Release setup](docs/RELEASE_SETUP.md).
 
 ## Privacy and data storage
 

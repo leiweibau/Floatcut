@@ -18,6 +18,7 @@
 #import "SRRecorderControl.h"
 #import "SRKeyCodeTransformer.h"
 #import "FloatcutOperator.h"
+#import "FloatcutStatusMenuUpdateState.h"
 #import "SGHotKey.h"
 
 @class SGHotKey;
@@ -90,7 +91,7 @@
     int jcDisplayNum;
 	BOOL needBezelUpdate;
 	BOOL needMenuUpdate;
-	BOOL menuUpdateScheduled;
+	FloatcutStatusMenuUpdateState menuRefreshState;
 }
 
 // Basic functionality

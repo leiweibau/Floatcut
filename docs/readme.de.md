@@ -61,7 +61,7 @@ Nach der Installation von Xcode erzeugt dieser Befehl ein universelles Release-A
 bash Scripts/package-app.sh
 ```
 
-Das Ergebnis ist `dist/Floatcut.app`. Das Skript verwendet nach Möglichkeit die stabile lokale Signierungsidentität `Floatcut Local Development` und fällt sonst auf eine Ad-hoc-Signatur zurück. Weitere Details stehen unter [Release setup](RELEASE_SETUP.md).
+Die Ergebnisse sind `dist/Floatcut.app` und `dist/Floatcut_universal_<Version>.dmg` (aktuell `Floatcut_universal_4.0.dmg`). Das Skript verwendet nach Möglichkeit die stabile lokale Signierungsidentität `Floatcut Local Development` und fällt sonst auf eine Ad-hoc-Signatur zurück. Weitere Details stehen unter [Release setup](RELEASE_SETUP.md).
 
 ## Datenschutz und Datenspeicherung
 

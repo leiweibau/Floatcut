@@ -50,7 +50,14 @@
 -(int)indexOfClipping:(NSString*)contents ofType:(NSString*)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL;
 -(bool)addClipping:(NSString*)contents ofType:(NSString*)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector;
 -(bool)addImageClippingData:(NSData*)imageData ofType:(NSString*)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector;
+// Sync imports always enter the primary history, regardless of the visible store.
+// The remote-origin flag is set before the callback can refresh the UI.
+-(bool)addRemoteTextClipping:(NSString *)contents ofType:(NSString *)type fromApp:(NSString *)appName target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector;
+-(bool)addRemoteImageClippingData:(NSData *)imageData ofType:(NSString *)type fromApp:(NSString *)appName target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector;
 -(BOOL)shouldSkip:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes;
+// Uses the same safety filter without adding pasteboard-type diagnostic clips
+// to whichever store happens to be visible during a remote receive.
+-(BOOL)shouldSkipRemoteText:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes;
 -(int)stackPosition;
 -(NSString*)getPasteFromStackPosition;
 -(NSString*)getPasteFromIndex:(int) position;

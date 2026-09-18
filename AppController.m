@@ -72,6 +72,7 @@
 - (void)presentSaveLocationPanelForAutoSave:(BOOL)autoSave;
 - (void)prewarmStatusPopoverIfNeeded;
 - (void)refreshStatusItemsContaining:(NSString *)search;
+- (void)refreshStatusItemsAfterSyncImport;
 - (void)clearFavoritesStore:(BOOL)clearFavorites statusPopoverController:(FloatcutStatusPopoverController *)controller;
 - (void)rememberPotentialPasteTargetApplication:(NSRunningApplication *)application;
 - (void)workspaceDidActivateApplication:(NSNotification *)notification;
@@ -84,7 +85,6 @@
 @property (nonatomic, retain) FloatcutSearchWindowController *swiftSearchWindowController;
 @property (nonatomic, retain) FloatcutPreferencesWindowController *swiftPreferencesWindowController;
 @property (nonatomic, retain) FloatcutStatusPopoverController *statusPopoverController;
-@property (nonatomic, assign) BOOL preserveStatusPopoverSearchOnNextMenuUpdate;
 
 @end
 
@@ -1695,20 +1695,18 @@
 }
 
 - (void)updateMenu {
-	if (menuUpdateScheduled)
+	if (!FloatcutScheduleStatusMenuUpdate(&menuRefreshState))
 		return;
-	menuUpdateScheduled = YES;
 
 	dispatch_async(dispatch_get_main_queue(), ^{
-		menuUpdateScheduled = NO;
-		if ( !statusItem || !statusItem.button.enabled || !self.statusPopoverController.isShown ) {
-			self.preserveStatusPopoverSearchOnNextMenuUpdate = NO;
+		BOOL preserveSearch = FloatcutConsumeStatusMenuUpdate(&menuRefreshState);
+		if (!FloatcutShouldRenderStatusMenuUpdate(statusItem.button.enabled,
+													 self.statusPopoverController.isShown)) {
 			return;
 		}
 
-		BOOL preserveSearch = self.preserveStatusPopoverSearchOnNextMenuUpdate;
-		self.preserveStatusPopoverSearchOnNextMenuUpdate = NO;
-		NSString *search = preserveSearch ? [self.statusPopoverController currentSearchText] : nil;
+		NSString *search = FloatcutStatusMenuSearchForUpdate(preserveSearch,
+												 [self.statusPopoverController currentSearchText]);
 		[self refreshStatusItemsContaining:search];
 		if (preserveSearch)
 			return;
@@ -1718,6 +1716,14 @@
         [[[searchBox cell] cancelButtonCell] performClick:self];
         [self.statusPopoverController resetSearch];
     });
+}
+
+// A remote import is not a user request to clear the current filter. Reuse the
+// coalesced menu update, which reads the selected store and search at execution
+// time so a quick search/store change cannot render an outdated snapshot.
+- (void)refreshStatusItemsAfterSyncImport {
+	menuRefreshState.preserveSearch = YES;
+	[self updateMenu];
 }
 
 - (void)refreshStatusItemsContaining:(NSString *)search {
@@ -2343,16 +2349,16 @@
 
 - (void)statusPopoverController:(FloatcutStatusPopoverController *)controller didRequestActionForClippingIdentifier:(NSString *)clippingIdentifier
 {
-	self.preserveStatusPopoverSearchOnNextMenuUpdate = YES;
+	menuRefreshState.preserveSearch = YES;
 	BOOL success = [flycutOperator favoritesStoreIsSelected]
 		? [flycutOperator moveFavoriteToPrimaryStoreWithIdentifier:clippingIdentifier]
 		: [flycutOperator toggleFavoriteForClippingWithIdentifier:clippingIdentifier];
 	if (success) {
 		[self refreshStatusItemsContaining:[controller currentSearchText]];
-		if (!menuUpdateScheduled)
-			self.preserveStatusPopoverSearchOnNextMenuUpdate = NO;
+		if (!menuRefreshState.scheduled)
+			menuRefreshState.preserveSearch = NO;
 	} else {
-		self.preserveStatusPopoverSearchOnNextMenuUpdate = NO;
+		menuRefreshState.preserveSearch = NO;
 	}
 }
 
@@ -2411,18 +2417,21 @@
 	if ([flycutOperator storeDisabled] || [text length] == 0)
 		return @"skipped";
 	NSArray *availableTypes = @[NSPasteboardTypeString];
-	if ([flycutOperator shouldSkip:text ofType:NSPasteboardTypeString fromAvailableTypes:availableTypes])
+	if ([flycutOperator shouldSkipRemoteText:text ofType:NSPasteboardTypeString fromAvailableTypes:availableTypes])
 		return @"skipped";
 
 	NSString *source = [NSString stringWithFormat:@"Sync: %@", peerName ?: @"Device"];
-	BOOL accepted = [flycutOperator addClipping:text
+	// Store delegates call updateMenu during insertion. Mark this refresh before
+	// insertion so even a delegate-scheduled update keeps the live search.
+	BOOL previouslyPreservedSearch = menuRefreshState.preserveSearch;
+	menuRefreshState.preserveSearch = YES;
+	BOOL accepted = [flycutOperator addRemoteTextClipping:text
 	                                    ofType:NSPasteboardTypeString
 	                                   fromApp:source
-	                            withAppBundleURL:nil
 	                                     target:self
-	                     clippingAddedSelector:@selector(updateMenu)];
-	if (accepted)
-		[[flycutOperator getClippingFromIndex:0] setReceivedFromSync:YES];
+	                     clippingAddedSelector:@selector(refreshStatusItemsAfterSyncImport)];
+	if (!accepted)
+		menuRefreshState.preserveSearch = previouslyPreservedSearch;
 
 	// This is intentionally a direct, main-thread write with an explicit block
 	// token. It never enters sendAcceptedLocalText:, so remote origin remains
@@ -2447,14 +2456,15 @@
 		return @"skipped";
 	NSString *pasteboardType = [contentType isEqualToString:@"image/png"] ? NSPasteboardTypePNG : @"public.jpeg";
 	NSString *source = [NSString stringWithFormat:@"Sync: %@", peerName ?: @"Device"];
-	BOOL accepted = [flycutOperator addImageClippingData:data
+	BOOL previouslyPreservedSearch = menuRefreshState.preserveSearch;
+	menuRefreshState.preserveSearch = YES;
+	BOOL accepted = [flycutOperator addRemoteImageClippingData:data
 	                                               ofType:pasteboardType
 	                                              fromApp:source
-	                                       withAppBundleURL:nil
 	                                                target:self
-	                                clippingAddedSelector:@selector(updateMenu)];
-	if (accepted)
-		[[flycutOperator getClippingFromIndex:0] setReceivedFromSync:YES];
+	                                clippingAddedSelector:@selector(refreshStatusItemsAfterSyncImport)];
+	if (!accepted)
+		menuRefreshState.preserveSearch = previouslyPreservedSearch;
 	[jcPasteboard declareTypes:@[pasteboardType] owner:nil];
 	[jcPasteboard setData:data forType:pasteboardType];
 	[self setPBBlockCount:[jcPasteboard changeCount]];

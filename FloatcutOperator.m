@@ -19,6 +19,10 @@
 #import "AppController.h"
 #endif
 
+@interface FloatcutOperator ()
+-(BOOL)shouldSkip:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes diagnosePasteboardType:(BOOL)diagnosePasteboardType;
+@end
+
 @implementation FloatcutOperator {
 	NSDateFormatter *dateFormatterForFilename;
 	NSDateFormatter *dateFormatterForDirectory;
@@ -508,13 +512,77 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
     return NO;
 }
 
+-(bool)addRemoteTextClipping:(NSString *)contents ofType:(NSString *)type fromApp:(NSString *)appName target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
+{
+	FloatcutStore *store = [self primaryStore];
+	if (!store || [contents length] == 0 ||
+		([store jcListCount] > 0 && [contents isEqualToString:[store clippingContentsAtPosition:0]]))
+		return NO;
+
+	FloatcutClipping *clipping = [[FloatcutClipping alloc] initWithContents:contents
+													withType:type
+											   withDisplayLength:displayLength
+										withAppLocalizedName:appName
+											withAppBundleURL:nil
+											   withTimestamp:[[NSDate date] timeIntervalSince1970]];
+	[clipping setReceivedFromSync:YES];
+	[store addClipping:clipping];
+	[clipping release];
+	if ([self favoritesStoreIsSelected])
+		stashedStackPosition = 0;
+	else
+		stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	return YES;
+}
+
+-(bool)addRemoteImageClippingData:(NSData *)imageData ofType:(NSString *)type fromApp:(NSString *)appName target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
+{
+	FloatcutStore *store = [self primaryStore];
+	if (!store || [imageData length] == 0)
+		return NO;
+
+	FloatcutClipping *clipping = [[FloatcutClipping alloc] initWithContents:@""
+													withType:type
+											 withImageData:imageData
+										   withDisplayLength:displayLength
+										withAppLocalizedName:appName
+											withAppBundleURL:nil
+											   withTimestamp:[[NSDate date] timeIntervalSince1970]];
+	if ([store jcListCount] > 0 && [clipping isEqual:[store clippingAtPosition:0]]) {
+		[clipping release];
+		return NO;
+	}
+	[clipping setReceivedFromSync:YES];
+	[store addClipping:clipping];
+	[clipping release];
+	if ([self favoritesStoreIsSelected])
+		stashedStackPosition = 0;
+	else
+		stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	return YES;
+}
+
 -(BOOL)shouldSkip:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes
+{
+	return [self shouldSkip:contents ofType:type fromAvailableTypes:availableTypes diagnosePasteboardType:YES];
+}
+
+-(BOOL)shouldSkipRemoteText:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes
+{
+	return [self shouldSkip:contents ofType:type fromAvailableTypes:availableTypes diagnosePasteboardType:NO];
+}
+
+-(BOOL)shouldSkip:(NSString *)contents ofType:(NSString *)type fromAvailableTypes:(NSArray<NSString *> *)availableTypes diagnosePasteboardType:(BOOL)diagnosePasteboardType
 {
 	// Check to see if we are skipping passwords based on length and characters.
 	if ( [[NSUserDefaults standardUserDefaults] boolForKey:@"skipPasswordFields"] )
 	{
 		// Check to see if they want a little help figuring out what types to enter.
-		if ( [[NSUserDefaults standardUserDefaults] boolForKey:@"revealPasteboardTypes"] ) {
+		if ( diagnosePasteboardType && [[NSUserDefaults standardUserDefaults] boolForKey:@"revealPasteboardTypes"] ) {
 			[clippingStore addClipping:type ofType:type fromAppLocalizedName:@"Floatcut" fromAppBundleURL:nil atTimestamp:0];
 			[self actionAfterListModification];
 		}

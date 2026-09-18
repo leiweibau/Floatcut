@@ -7,16 +7,18 @@ it is installed in the login keychain. Its stable designated requirement keeps
 Keychain access consistent across rebuilt app bundles. The GitHub workflow,
 which has no local certificate, creates an ad-hoc-signed DMG.
 
-## Local app bundle
+## Local app bundle and DMG
 
-Build the app bundle in `dist/`:
+Build the app bundle and DMG in `dist/`:
 
 ```bash
 bash Scripts/package-app.sh
 ```
 
-The result is `dist/Floatcut.app`. The script builds the `Floatcut` scheme for
-macOS and signs the complete bundle with `Floatcut Local Development` when that
+The results are `dist/Floatcut.app` and `dist/Floatcut_universal_<version>.dmg`
+(currently `Floatcut_universal_4.0.dmg`). The DMG contains the signed app and
+an Applications shortcut. The script builds the `Floatcut` scheme for macOS
+and signs the complete bundle with `Floatcut Local Development` when that
 identity is available. If it is absent, the script reports and uses an ad-hoc
 signature. A specific identity can be selected with
 `FLOATCUT_SIGNING_IDENTITY`; pass `-` explicitly to force ad-hoc signing.

@@ -2,6 +2,7 @@
 #import "FloatcutClipping.h"
 #import "FloatcutStore.h"
 #import "FloatcutOperator.h"
+#import "FloatcutStatusMenuUpdateState.h"
 
 @interface FCNoopSaveTarget : NSObject
 - (void)addPreferencesToDictionary:(NSMutableDictionary *)dictionary;
@@ -34,6 +35,25 @@
     if ([prefix isEqualToString:@"Autosave "])
         autosaveRequestCount++;
     return YES;
+}
+@end
+
+@interface FloatcutOperator (FCRemoteImportTesting)
+- (FloatcutStore *)primaryStore;
+@end
+
+@interface FCRemoteImportObserver : NSObject
+@property (nonatomic, assign) FloatcutOperator *operator;
+@property (nonatomic, assign) int callbackCount;
+@property (nonatomic, assign) BOOL sawRemoteMarker;
+- (void)didImport;
+@end
+
+@implementation FCRemoteImportObserver
+- (void)didImport
+{
+    self.callbackCount++;
+    self.sawRemoteMarker = [[[self.operator primaryStore] clippingAtPosition:0] receivedFromSync];
 }
 @end
 
@@ -98,6 +118,30 @@ static void testClippingIdentityAndImages(void)
     [first release];
     [second release];
     [image release];
+}
+
+static void testStatusMenuRefreshCoalescing(void)
+{
+    FloatcutStatusMenuUpdateState state = { NO, NO };
+    FCAssert(FloatcutScheduleStatusMenuUpdate(&state), @"First menu update should be scheduled");
+    // The store delegate schedules first; the later Sync callback upgrades the
+    // same queued update without scheduling a second render.
+    state.preserveSearch = YES;
+    FCAssert(!FloatcutScheduleStatusMenuUpdate(&state), @"Burst imports should share one queued render");
+    NSString *currentSearch = @"older filter";
+    currentSearch = @"latest filter";
+    BOOL preserveSearch = FloatcutConsumeStatusMenuUpdate(&state);
+    FCAssert(preserveSearch && !state.scheduled && !state.preserveSearch,
+             @"Queued Sync refresh must preserve search and reset its pending state");
+    FCAssert([FloatcutStatusMenuSearchForUpdate(preserveSearch, currentSearch) isEqualToString:@"latest filter"],
+             @"Refresh must use the search as it exists when rendered, not when scheduled");
+    FCAssert(FloatcutShouldRenderStatusMenuUpdate(YES, YES), @"Open popover should render");
+    FCAssert(!FloatcutShouldRenderStatusMenuUpdate(YES, NO), @"Closed popover must skip visible work");
+    FCAssert(!FloatcutShouldRenderStatusMenuUpdate(NO, YES), @"Disabled status button must skip visible work");
+    FCAssert(FloatcutScheduleStatusMenuUpdate(&state), @"A consumed refresh must allow the next update");
+    preserveSearch = FloatcutConsumeStatusMenuUpdate(&state);
+    FCAssert(!preserveSearch && FloatcutStatusMenuSearchForUpdate(preserveSearch, currentSearch) == nil,
+             @"Ordinary menu updates must retain their existing search-reset behavior");
 }
 
 static void testStoreOrderSearchAndDuplicates(void)
@@ -245,6 +289,108 @@ static void testFavoriteStoreSwitchingAndTargetedClearing(void)
     [operator release];
     [saveTarget release];
     [previousSavePreference release];
+}
+
+static void testRemoteImportsAlwaysUsePrimaryStore(void)
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *keys = @[@"store", @"savePreference", @"rememberNum", @"favoritesRememberNum",
+                      @"removeDuplicates", @"skipPasswordFields", @"revealPasteboardTypes"];
+    NSMutableDictionary *previousValues = [NSMutableDictionary dictionary];
+    for (NSString *key in keys) {
+        id value = [defaults objectForKey:key];
+        if (value)
+            previousValues[key] = value;
+    }
+    [defaults setObject:@{} forKey:@"store"];
+    [defaults setInteger:0 forKey:@"savePreference"];
+    [defaults setInteger:3 forKey:@"rememberNum"];
+    [defaults setInteger:3 forKey:@"favoritesRememberNum"];
+    [defaults setBool:NO forKey:@"removeDuplicates"];
+    [defaults setBool:YES forKey:@"skipPasswordFields"];
+    [defaults setBool:YES forKey:@"revealPasteboardTypes"];
+
+    FCNoopSaveTarget *saveTarget = [[FCNoopSaveTarget alloc] init];
+    FloatcutOperator *operator = [[FloatcutOperator alloc] init];
+    [operator awakeFromNibDisplaying:3 withDisplayLength:80
+                    withSaveSelector:@selector(addPreferencesToDictionary:)
+                            forTarget:saveTarget];
+    FCRemoteImportObserver *observer = [[FCRemoteImportObserver alloc] init];
+    observer.operator = operator;
+
+    FCAssert([operator addRemoteTextClipping:@"first" ofType:@"text" fromApp:@"Sync: Test"
+                                    target:observer clippingAddedSelector:@selector(didImport)],
+             @"First remote text import failed");
+    FCAssert(observer.callbackCount == 1 && observer.sawRemoteMarker,
+             @"Remote marker must exist before the UI callback");
+    FCAssert([[[operator getClippingFromIndex:0] appLocalizedName] isEqualToString:@"Sync: Test"],
+             @"Remote text source changed");
+
+    [operator setFavoritesStoreSelected:YES];
+    [operator addClipping:@"favorite" ofType:@"text" fromApp:@"Tests"
+         withAppBundleURL:nil target:nil clippingAddedSelector:NULL];
+    NSString *favoriteID = [[[operator getClippingFromIndex:0] identifier] copy];
+    FCAssert(![operator shouldSkipRemoteText:@"harmless remote text" ofType:@"text"
+                           fromAvailableTypes:@[@"text"]], @"Safe remote text was unexpectedly filtered");
+    FCAssert(operator.jcListCount == 1,
+             @"Remote password filtering added a diagnostic clip to the active favorites");
+    FCAssert([operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
+                                    target:observer clippingAddedSelector:@selector(didImport)],
+             @"Remote text import while viewing favorites failed");
+    FCAssert(operator.favoritesStoreIsSelected && operator.jcListCount == 1,
+             @"Remote text import changed the favorite selection or count");
+    FCAssert([[[operator getClippingFromIndex:0] identifier] isEqualToString:favoriteID],
+             @"Remote text import changed favorite contents");
+    FCAssert(observer.callbackCount == 2 && observer.sawRemoteMarker,
+             @"Remote text marker must precede the callback even with favorites selected");
+
+    NSData *imageData = [@"remote-image-data" dataUsingEncoding:NSUTF8StringEncoding];
+    FCAssert([operator addRemoteImageClippingData:imageData ofType:@"public.png" fromApp:@"Sync: Test"
+                                         target:observer clippingAddedSelector:@selector(didImport)],
+             @"Remote image import while viewing favorites failed");
+    FCAssert(operator.favoritesStoreIsSelected && operator.jcListCount == 1,
+             @"Remote image import changed the favorite selection or count");
+    FCAssert(observer.callbackCount == 3 && observer.sawRemoteMarker,
+             @"Remote image marker must precede the callback");
+    FCAssert(![operator addRemoteImageClippingData:imageData ofType:@"public.png" fromApp:@"Sync: Test"
+                                          target:observer clippingAddedSelector:@selector(didImport)],
+             @"Consecutive duplicate remote image should be rejected");
+    FCAssert(observer.callbackCount == 3, @"Duplicate remote image caused an unnecessary UI callback");
+
+    [operator setFavoritesStoreSelected:NO];
+    FCAssert(operator.jcListCount == 3, @"Remote imports should obey the primary store capacity");
+    FloatcutClipping *image = [operator getClippingFromIndex:0];
+    FCAssert([image isImage] && [image receivedFromSync] && [[image imageData] isEqualToData:imageData],
+             @"Remote image data or origin marker changed in the primary store");
+    FCAssert([[[operator getClippingFromIndex:1] contents] isEqualToString:@"second"],
+             @"Remote text order changed in the primary store");
+    FCAssert([operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
+                                    target:observer clippingAddedSelector:@selector(didImport)],
+             @"A non-consecutive text entry should still be accepted");
+    FCAssert(operator.jcListCount == 3, @"Remote text import exceeded the primary store capacity");
+    FCAssert([[[operator getClippingFromIndex:0] contents] isEqualToString:@"second"],
+             @"Newest remote text is not at the top");
+    FCAssert(![operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
+                                     target:observer clippingAddedSelector:@selector(didImport)],
+             @"Consecutive duplicate remote text should be rejected");
+    FCAssert(observer.callbackCount == 4, @"Duplicate remote text caused an unnecessary UI callback");
+
+    [operator setFavoritesStoreSelected:YES];
+    FCAssert(operator.jcListCount == 1 &&
+             [[[operator getClippingFromIndex:0] identifier] isEqualToString:favoriteID],
+             @"Primary store capacity trim changed favorites");
+
+    for (NSString *key in keys) {
+        id value = previousValues[key];
+        if (value)
+            [defaults setObject:value forKey:key];
+        else
+            [defaults removeObjectForKey:key];
+    }
+    [favoriteID release];
+    [observer release];
+    [operator release];
+    [saveTarget release];
 }
 
 static void testPerItemFavoriteActions(void)
@@ -494,9 +640,11 @@ int main(void)
 {
     @autoreleasepool {
         testClippingIdentityAndImages();
+        testStatusMenuRefreshCoalescing();
         testStoreOrderSearchAndDuplicates();
         testTextMergeSkipsImages();
         testFavoriteStoreSwitchingAndTargetedClearing();
+        testRemoteImportsAlwaysUsePrimaryStore();
         testPerItemFavoriteActions();
         testPersistenceRoundTrip();
         runSearchBenchmark();
