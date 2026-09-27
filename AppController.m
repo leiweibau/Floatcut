@@ -1253,7 +1253,7 @@
 						return;
 
 					if ( imageData.length > 0 ) {
-							BOOL accepted = [flycutOperator addImageClippingData:imageData
+							BOOL accepted = [flycutOperator addCapturedImageClippingData:imageData
                                                           ofType:imageType
                                                          fromApp:[currRunningApp localizedName]
                                                   withAppBundleURL:currRunningApp.bundleURL.path
@@ -1264,7 +1264,7 @@
 					} else if ( contents == nil || [flycutOperator shouldSkip:contents ofType:textType fromAvailableTypes:availableTypes] ) {
 						DLog(@"Contents: Empty or skipped");
 					} else {
-						BOOL accepted = [flycutOperator addClipping:contents ofType:textType fromApp:[currRunningApp localizedName] withAppBundleURL:currRunningApp.bundleURL.path target:self clippingAddedSelector:@selector(updateMenu)];
+						BOOL accepted = [flycutOperator addCapturedTextClipping:contents ofType:textType fromApp:[currRunningApp localizedName] withAppBundleURL:currRunningApp.bundleURL.path target:self clippingAddedSelector:@selector(updateMenu)];
 						if (accepted)
 							[[FloatcutSyncCoordinator shared] sendAcceptedLocalText:contents];
 					}

@@ -85,7 +85,7 @@ Unter **Speicher** lassen sich die Höchstzahl der letzten Clips und Favoriten, 
 
 Unter **Erfassung** stehen folgende Schutz- und Verhaltensoptionen bereit:
 
-- **Duplikate entfernen:** verhindert wiederholte Kopien im Verlauf.
+- **Duplikate entfernen:** ist standardmäßig aktiv. Ein erneut kopierter Inhalt wird als neuer Eintrag oben eingefügt; ein älterer inhaltsgleicher Eintrag wird entfernt. Ist die Option aus, bleiben beide Einträge erhalten. Bei Bildern müssen Typ und Bilddaten übereinstimmen.
 - **Eingefügten Eintrag nach oben verschieben:** behandelt einen erneut genutzten Clip als neuesten Eintrag.
 - **Nicht aus Passwortfeldern kopieren:** filtert Zwischenablage-Typen von Passwortprogrammen und geschützten Feldern.
 - **Vergessene Clips/Favoriten sichern:** schreibt durch die eingestellte Kapazität verdrängte Einträge in den gewählten Ordner.
@@ -107,6 +107,7 @@ Konfigurierbar sind Transparenz, Breite und Höhe des Bezels, die Anzeige von Qu
 
 - **Zwischenablage-Typen im Verlauf erfassen** fügt den erkannten Text-Zwischenablagetyp als Diagnoseeintrag zum Verlauf hinzu. Dafür muss der Passwortfeld-Filter aktiv sein; im Normalbetrieb sollte die Option ausgeschaltet bleiben.
 - **Detailliertes Sync-Logging** protokolliert bereinigte Informationen zu Erkennung, Kopplung, Verbindung, Übertragung und Widerrufen für die Fehlersuche.
+- **Bonjour/mDNS neu starten** startet bei aktivierter Synchronisation Floatcuts Gerätesuche und Dienstankündigung neu. Kopplungen und Zwischenablageverlauf bleiben erhalten.
 - **Widerrufsliste leeren** entfernt lokal gespeicherte Widerrufseinträge. Eine Kopplung wird dadurch nicht wiederhergestellt; ein Gerät muss erneut gekoppelt werden, wenn es wieder vertrauenswürdig sein soll.
 
 ### Danksagung

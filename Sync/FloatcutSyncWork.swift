@@ -50,9 +50,14 @@ final class FloatcutSyncOrderedInbox {
     private var entries: [Entry] = []
     private var generation = 0
     private(set) var pendingBytes = 0
+    private(set) var inProgressBytes = 0
     private(set) var isProcessing = false
     var didProgress: (() -> Void)?
-    var canReceive: Bool { pendingBytes < 2 * FloatcutSyncProtocol.maximumFrameBytes && entries.count < 128 }
+    var queuedAndInProgressBytes: Int { pendingBytes + inProgressBytes }
+    var queuedAndInProgressCount: Int { entries.count + (isProcessing ? 1 : 0) }
+    var canReceive: Bool {
+        queuedAndInProgressBytes < 2 * FloatcutSyncProtocol.maximumFrameBytes && queuedAndInProgressCount < 128
+    }
     var isEmpty: Bool { !isProcessing && entries.isEmpty }
 
     func enqueue(bytes: Int, start: @escaping (@escaping () -> Void) -> Void) {
@@ -65,6 +70,7 @@ final class FloatcutSyncOrderedInbox {
         generation += 1
         entries.removeAll()
         pendingBytes = 0
+        inProgressBytes = 0
         isProcessing = false
     }
 
@@ -72,12 +78,14 @@ final class FloatcutSyncOrderedInbox {
         guard !isProcessing, !entries.isEmpty else { return }
         isProcessing = true
         let entry = entries.removeFirst()
+        pendingBytes -= entry.bytes
+        inProgressBytes = entry.bytes
         let currentGeneration = generation
         var completed = false
         entry.start { [weak self] in
             guard let self, !completed, self.generation == currentGeneration else { return }
             completed = true
-            self.pendingBytes -= entry.bytes
+            self.inProgressBytes = 0
             self.isProcessing = false
             self.drain()
             self.didProgress?()

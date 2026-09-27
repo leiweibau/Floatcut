@@ -161,6 +161,9 @@
 "Local network sync" = "Local network sync";
 "Enable encrypted peer-to-peer clipboard sync" = "Enable encrypted peer-to-peer clipboard sync";
 "Enable detailed sync diagnostics" = "Enable detailed synchronization logging";
+"Restart Bonjour/mDNS" = "Restart Bonjour/mDNS";
+"Restarts Floatcut's device discovery and service announcement without deleting pairings or clipboard history. Local sync must be enabled." = "Restarts Floatcut's device discovery and service announcement without deleting pairings or clipboard history. Local sync must be enabled.";
+"Restarting Bonjour/mDNS discovery…" = "Restarting Bonjour/mDNS discovery…";
 "Records redacted discovery, connection, pairing and revocation events. Clipboard contents, keys, nonces and verification codes are never written. Log file: %@" = "Records redacted discovery, connection, pairing and revocation events. Clipboard contents, keys, nonces and verification codes are never written. Log file: %@";
 "Only new text clips are sent directly to paired devices that are online. Floatcut does not use a cloud service and does not queue missed clips." = "Only new text clips are sent directly to paired devices that are online. Floatcut does not use a cloud service and does not queue missed clips.";
 "Allow new pairing requests" = "Allow new pairing requests";

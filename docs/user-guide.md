@@ -85,7 +85,7 @@ Open **Settings** from the Floatcut menu or press **Command-,** while the bezel 
 
 **Capture** provides these safeguards and behaviors:
 
-- **Remove duplicates:** avoids repeated copies in history.
+- **Remove duplicates:** is on by default. Copying identical content creates a new entry at the top and removes an older matching entry. With the option off, both entries remain. Images must match in type and encoded bytes.
 - **Move pasted item to top:** treats a reused clip as the newest item.
 - **Don't copy from password fields:** filters clipboard types used by password tools and secure fields.
 - **Save forgotten clippings/favorites:** writes items displaced by the configured capacity to the selected folder.
@@ -107,6 +107,7 @@ Adjust bezel transparency, width, and height; show or hide source applications a
 
 - **Record pasteboard types in clipboard history** adds the detected text pasteboard type as a diagnostic history item. It requires password-field filtering and should normally remain off.
 - **Detailed sync logging** records redacted discovery, pairing, connection, transfer, and revocation diagnostics for troubleshooting.
+- **Restart Bonjour/mDNS** restarts Floatcut's local discovery and service announcement when sync is enabled. It does not delete pairings or clipboard history.
 - **Clear revocation list** removes locally retained revocation records. It does not recreate a pairing; pair again if the device should be trusted.
 
 ### Acknowledgements

@@ -290,8 +290,11 @@
     if (!other || ![other isKindOfClass:[self class]])
         return NO;
     FloatcutClipping * otherClip = (FloatcutClipping *)other;
-    if ([self isImage] || [otherClip isImage])
-        return [[self imageData] isEqualToData:[otherClip imageData]];
+    if ([self isImage] || [otherClip isImage]) {
+        BOOL sameType = self.type == otherClip.type || [self.type isEqualToString:otherClip.type];
+        return [self isImage] && [otherClip isImage] && sameType &&
+            [[self imageData] isEqualToData:[otherClip imageData]];
+    }
     return (/*[self.type isEqualToString:otherClip.type] &&*/ // Type is under-utilized a this time and will mismatch on cross-device (macOS <-> iOS) usage.  This should be revisited once we have support for more than just raw text clippings.
             [self.contents isEqualToString:otherClip.contents]);
 }

@@ -53,6 +53,10 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     private let legacyPendingStore = FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>(fileName: "pending-pairings-v1.json")
     private let logger = Logger(subsystem: "de.meierkarsten.floatcut", category: "clipboard-sync")
     private var engine: FloatcutSyncEngine?
+    private let snapshotGate = FloatcutSyncSnapshotGate()
+    // Keep accepted clip IDs across transport reconnections, as the Windows
+    // client does. The per-connection replay cache still rejects wire retries.
+    private var acceptedRemoteClipKeys: [String] = []
 
     private override init() {
         super.init()
@@ -81,6 +85,13 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         FloatcutSyncDiagnostics.shared.setEnabled(enabled)
         if enabled { recordDiagnostic("diagnostics_enabled", ["sync_enabled": isEnabled ? "true" : "false"]) }
         objectWillChange.send()
+    }
+
+    public func restartBonjourDiscovery() {
+        guard isEnabled, let engine else { return }
+        statusText = NSLocalizedString("Restarting Bonjour/mDNS discovery…", comment: "")
+        recordDiagnostic("bonjour_restart_requested")
+        engine.restartBonjour()
     }
 
     public func setAllowsNewPairingRequests(_ allowed: Bool) {
@@ -118,10 +129,11 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         if enabled {
             guard engine == nil else { return }
             do {
+                let epoch = snapshotGate.beginEpoch()
                 let identity = try FloatcutSyncIdentityStore.shared.loadOrCreate()
                 localDeviceID = identity.deviceID
                 localCertificateSHA256 = identity.certificateSHA256
-                let engine = FloatcutSyncEngine(identity: identity, coordinator: self)
+                let engine = FloatcutSyncEngine(identity: identity, coordinator: self, epoch: epoch)
                 self.engine = engine
                 statusText = NSLocalizedString("Starting local discovery…", comment: "")
                 recordDiagnostic("sync_identity_ready")
@@ -134,6 +146,7 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
                 UserDefaults.standard.set(false, forKey: "floatcutSyncEnabled")
             }
         } else {
+            _ = snapshotGate.beginEpoch()
             engine?.stop()
             engine = nil
             discoveredPeers = []
@@ -166,6 +179,8 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         DispatchQueue.main.async {
             defer { FloatcutSyncDiagnostics.shared.recordElapsed("remote_text_ui_wait_and_apply", since: started) }
             guard self.canApplyRemoteClip(from: peer), token.isActive else { completion("skipped"); return }
+            let key = peer.deviceID + "/" + clipID
+            guard !self.acceptedRemoteClipKeys.contains(key) else { completion("duplicate"); return }
             let result = self.clipboardDelegate?.syncCoordinator(
                 self,
                 didReceiveText: text,
@@ -173,7 +188,9 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
                 peerDeviceID: peer.deviceID,
                 clipID: clipID
             ) ?? "invalid"
-            completion(["applied", "duplicate", "skipped", "unsupported", "invalid"].contains(result) ? result : "invalid")
+            let status = ["applied", "duplicate", "skipped", "unsupported", "invalid"].contains(result) ? result : "invalid"
+            if status == "applied" { self.rememberAcceptedRemoteClip(key) }
+            completion(status)
         }
     }
 
@@ -186,12 +203,21 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
             guard self.canApplyRemoteClip(from: peer), token.isActive, transferToken.isActive else {
                 completion("skipped"); return
             }
+            let key = peer.deviceID + "/" + clipID
+            guard !self.acceptedRemoteClipKeys.contains(key) else { completion("duplicate"); return }
             let result = self.clipboardDelegate?.syncCoordinator(
                 self, didReceiveImage: data, contentType: contentType, peerName: peer.name,
                 peerDeviceID: peer.deviceID, clipID: clipID
             ) ?? "invalid"
-            completion(["applied", "duplicate", "skipped", "unsupported", "invalid"].contains(result) ? result : "invalid")
+            let status = ["applied", "duplicate", "skipped", "unsupported", "invalid"].contains(result) ? result : "invalid"
+            if status == "applied" { self.rememberAcceptedRemoteClip(key) }
+            completion(status)
         }
+    }
+
+    private func rememberAcceptedRemoteClip(_ key: String) {
+        acceptedRemoteClipKeys.append(key)
+        if acceptedRemoteClipKeys.count > 256 { acceptedRemoteClipKeys.removeFirst() }
     }
 
     private func canApplyRemoteClip(from peer: FloatcutSyncPeer) -> Bool {
@@ -205,30 +231,38 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         DispatchQueue.main.async { completion(self.canApplyRemoteClip(from: peer)) }
     }
 
-    func updateDiscovery(_ peers: [FloatcutDiscoveredPeer]) {
+    func updateDiscovery(_ peers: [FloatcutDiscoveredPeer], epoch: UInt64, revision: UInt64) {
         recordDiagnostic("discovery_updated", ["peer_count": String(peers.count)])
         DispatchQueue.main.async {
+            guard self.snapshotGate.accepts(epoch: epoch, revision: revision) else { return }
             self.discoveredPeers = peers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            self.statusText = String(format: NSLocalizedString("%d device(s) available in the local network.", comment: ""), peers.count)
         }
     }
 
-    func updateOnline(_ ids: Set<String>) {
-        DispatchQueue.main.async { self.onlineDeviceIDs = ids }
+    func updateOnline(_ ids: Set<String>, epoch: UInt64, revision: UInt64) {
+        DispatchQueue.main.async {
+            guard self.snapshotGate.accepts(epoch: epoch, revision: revision) else { return }
+            self.onlineDeviceIDs = ids
+        }
     }
 
-    func showNetworkError(_ detail: String) {
+    func showNetworkError(_ detail: String, epoch: UInt64, revision: UInt64) {
         recordDiagnostic("network_status", ["detail": detail])
-        DispatchQueue.main.async { self.statusText = detail }
+        DispatchQueue.main.async {
+            guard self.snapshotGate.accepts(epoch: epoch, revision: revision) else { return }
+            self.statusText = self.securityWarning ?? detail
+        }
     }
 
-    func reportIdentityMismatch(deviceID: String, name: String) {
+    func reportIdentityMismatch(deviceID: String, name: String, epoch: UInt64) {
         if var peer = pairedPeer(deviceID) {
             peer.identityMismatch = true
             try? upsertPeer(peer)
         }
         DispatchQueue.main.async {
+            guard epoch == self.snapshotGate.epoch else { return }
             self.securityWarning = String(format: NSLocalizedString("The cryptographic identity of %@ has changed. Clipboard access was blocked. Remove and pair the device again.", comment: ""), name)
+            self.statusText = self.securityWarning ?? ""
             self.identityResetRecommended = false
         }
         logger.error("peer_identity_mismatch peer=\(deviceID.prefix(8), privacy: .public)")
@@ -282,6 +316,7 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
             try pendingStore.mutate { $0.removeAll { $0.peerDeviceID == peer.deviceID } }
             refreshStores()
             engine?.refreshAdvertisement()
+            engine?.peerAuthorizationChanged(deviceID: peer.deviceID)
             engine?.deliverRevocation(revocation)
         } catch {
             statusText = error.localizedDescription
@@ -323,6 +358,7 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     public func resetIdentity() {
         UserDefaults.standard.set(false, forKey: "floatcutSyncEnabled")
+        _ = snapshotGate.beginEpoch()
         engine?.stopAndWait()
         engine = nil
         do {
@@ -413,14 +449,25 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
             records.append(remote)
         }
         refreshStores()
+        engine?.refreshAdvertisement()
+        engine?.peerAuthorizationChanged(deviceID: revocation.peerDeviceID)
     }
 
-    func acknowledgeRevocation(_ revocationID: String) {
-        try? revocationStore.mutate { records in
-            guard let index = records.firstIndex(where: { $0.revocationID == revocationID }) else { return }
-            records[index].acknowledged = true
+    @discardableResult
+    func acknowledgeRevocation(_ revocationID: String) -> Bool {
+        var found = false
+        do {
+            try revocationStore.mutate { records in
+                guard let index = records.firstIndex(where: { $0.revocationID == revocationID }) else { return }
+                records[index].acknowledged = true
+                found = true
+            }
+        } catch {
+            recordDiagnostic("revocation_ack_persist_failed", ["error_type": String(describing: type(of: error))])
+            return false
         }
-        refreshStores()
+        if found { refreshStores() }
+        return found
     }
 
     func confirmIncomingPairing(peerName: String, completion: @escaping (Bool) -> Void) {
@@ -502,31 +549,139 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 private final class FloatcutSyncEngine {
     private let identity: FloatcutSyncIdentity
     private weak var coordinator: FloatcutSyncCoordinator?
+    private let epoch: UInt64
     private let queue = DispatchQueue(label: "de.meierkarsten.floatcut.sync.network", qos: .utility)
     private let handshakeRegistry = FloatcutTLSHandshakeRegistry()
+    private let clock: FloatcutSyncElapsedClock = FloatcutSyncContinuousClock()
     private var browser: NWBrowser?
     private var listener: NWListener?
     private var discovered: [String: FloatcutDiscoveredPeer] = [:]
+    private var discoveryObservations: [String: [String: FloatcutDiscoveredPeer]] = [:]
+    private var candidateIndices: [String: Int] = [:]
+    private var preferredEndpointKeys: [String: String] = [:]
     private var connectionsByID: [UUID: FloatcutPeerConnection] = [:]
     private var connectionsByDeviceID: [String: FloatcutPeerConnection] = [:]
-    private var reconnectAttempts: [String: Int] = [:]
+    private var outgoingReservations: [String: UUID] = [:]
+    private var schedulers: [String: FloatcutSyncPeerScheduler] = [:]
+    private var retryTimers: [String: DispatchSourceTimer] = [:]
+    private var securitySuspendedDeviceIDs: Set<String> = []
     private var incomingAttempts: [String: [Date]] = [:]
     private var stopped = false
+    private var bonjourGeneration: UInt64 = 0
+    private var listenerGeneration: UInt64 = 0
+    private var browserGeneration: UInt64 = 0
+    private var listenerRecoveryAttempts = 0
+    private var browserRecoveryAttempts = 0
+    private var listenerRecoveryTimer: DispatchSourceTimer?
+    private var browserRecoveryTimer: DispatchSourceTimer?
+    private var interfaceMonitors: [NWPathMonitor] = []
+    private var interfacePathSignatures: [String: String] = [:]
+    private var interfaceRecoveryWorkItem: DispatchWorkItem?
+    private var wakeObserver: NSObjectProtocol?
+    private var snapshotRevision: UInt64 = 0
+    private var listenerHealth: FloatcutSyncComponentHealth = .starting
+    private var browserHealth: FloatcutSyncComponentHealth = .starting
 
-    init(identity: FloatcutSyncIdentity, coordinator: FloatcutSyncCoordinator) {
+    fileprivate var epochValue: UInt64 { epoch }
+
+    private enum FloatcutSyncComponentHealth {
+        case starting
+        case ready
+        case waiting(String)
+        case failed(String)
+    }
+
+    init(identity: FloatcutSyncIdentity, coordinator: FloatcutSyncCoordinator, epoch: UInt64) {
         self.identity = identity
         self.coordinator = coordinator
+        self.epoch = epoch
+    }
+
+    private func nextSnapshotRevision() -> UInt64 {
+        snapshotRevision &+= 1
+        return snapshotRevision
+    }
+
+    fileprivate func reportNetworkMessage(_ detail: String) {
+        coordinator?.showNetworkError(detail, epoch: epoch, revision: nextSnapshotRevision())
+    }
+
+    /// A discovered peer count never proves the listener is advertising. Keep
+    /// listener failures ahead of browser failures and peer availability.
+    private func publishNetworkStatus() {
+        let text: String
+        switch listenerHealth {
+        case .failed(let detail), .waiting(let detail): text = detail
+        case .starting: text = NSLocalizedString("Starting local discovery…", comment: "")
+        case .ready:
+            switch browserHealth {
+            case .failed(let detail), .waiting(let detail): text = detail
+            case .starting: text = NSLocalizedString("Starting local discovery…", comment: "")
+            case .ready:
+                text = String(format: NSLocalizedString("%d device(s) available in the local network.", comment: ""), discovered.count)
+            }
+        }
+        coordinator?.showNetworkError(text, epoch: epoch, revision: nextSnapshotRevision())
     }
 
     func start() {
-        queue.async {
+        queue.async { [self] in
             self.stopped = false
+            if self.wakeObserver == nil {
+                self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+                ) { [weak self] _ in
+                    self?.queue.async {
+                        guard let self, !self.stopped else { return }
+                        for connection in self.connectionsByID.values {
+                            connection.reconcileLivenessAfterWake()
+                        }
+                    }
+                }
+            }
+            self.bonjourGeneration &+= 1
+            self.listenerGeneration &+= 1
+            self.browserGeneration &+= 1
+            self.listenerHealth = .starting
+            self.browserHealth = .starting
             self.cleanupStaleImageFiles()
             do {
-                try self.startListener()
-                self.startBrowser()
+                try self.startListener(generation: self.listenerGeneration)
+                self.startBrowser(generation: self.browserGeneration)
+                self.startInterfaceMonitors()
             } catch {
-                self.coordinator?.showNetworkError(error.localizedDescription)
+                self.coordinator?.showNetworkError(error.localizedDescription, epoch: self.epoch, revision: self.nextSnapshotRevision())
+            }
+        }
+    }
+
+    func restartBonjour() {
+        queue.async {
+            guard !self.stopped else { return }
+            self.bonjourGeneration &+= 1
+            self.listenerGeneration &+= 1
+            self.browserGeneration &+= 1
+            self.listenerHealth = .starting
+            self.browserHealth = .starting
+            self.browser?.cancel()
+            self.listener?.cancel()
+            self.browser = nil
+            self.listener = nil
+            for deviceID in self.discovered.keys { self.cancelRetry(deviceID: deviceID, keepDeadline: true) }
+            self.discovered.removeAll()
+            self.discoveryObservations.removeAll()
+            self.coordinator?.updateDiscovery([], epoch: self.epoch, revision: self.nextSnapshotRevision())
+            self.publishNetworkStatus()
+
+            // Keep established peer connections and the local identity intact.
+            // Only Bonjour browsing and service advertisement are recreated.
+            do {
+                try self.startListener(generation: self.listenerGeneration)
+                self.startBrowser(generation: self.browserGeneration)
+                self.coordinator?.recordDiagnostic("bonjour_restart_started")
+            } catch {
+                self.coordinator?.recordDiagnostic("bonjour_restart_failed", ["detail": error.localizedDescription])
+                self.coordinator?.showNetworkError(error.localizedDescription, epoch: self.epoch, revision: self.nextSnapshotRevision())
             }
         }
     }
@@ -550,6 +705,18 @@ private final class FloatcutSyncEngine {
 
     private func stopLocked() {
         stopped = true
+        interfaceRecoveryWorkItem?.cancel()
+        interfaceRecoveryWorkItem = nil
+        interfaceMonitors.forEach { $0.cancel() }
+        interfaceMonitors.removeAll()
+        interfacePathSignatures.removeAll()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        bonjourGeneration &+= 1
+        listenerGeneration &+= 1
+        browserGeneration &+= 1
         browser?.cancel()
         listener?.cancel()
         browser = nil
@@ -557,6 +724,11 @@ private final class FloatcutSyncEngine {
         connectionsByID.values.forEach { $0.cancel() }
         connectionsByID.removeAll()
         connectionsByDeviceID.removeAll()
+        outgoingReservations.removeAll()
+        retryTimers.values.forEach { $0.cancel() }
+        retryTimers.removeAll()
+        listenerRecoveryTimer?.cancel()
+        browserRecoveryTimer?.cancel()
         publishOnline()
     }
 
@@ -569,15 +741,19 @@ private final class FloatcutSyncEngine {
 
     func beginPairing(with peer: FloatcutDiscoveredPeer) {
         queue.async {
-            guard self.connectionsByDeviceID[peer.deviceID] == nil else {
+            self.securitySuspendedDeviceIDs.remove(peer.deviceID)
+            self.schedulers[peer.deviceID]?.clearSecuritySuspension()
+            guard !self.isDeviceOccupied(peer.deviceID) else {
                 FloatcutSyncDiagnostics.shared.record("pair_request_blocked_active_connection", fields: ["peer": String(peer.deviceID.prefix(8))])
-                self.coordinator?.showNetworkError(
+                self.reportNetworkMessage(
                     String(format: NSLocalizedString("A connection to %@ is already active.", comment: ""), peer.name)
                 )
                 return
             }
             FloatcutSyncDiagnostics.shared.record("pair_connection_opening", fields: ["peer": String(peer.deviceID.prefix(8))])
-            self.open(endpoint: peer.endpoint, direction: .outgoingPairing)
+            self.open(endpoint: peer.endpoint, direction: .outgoingPairing,
+                      targetDeviceID: peer.deviceID, purpose: .newPairing, expectedFingerprint: nil,
+                      allowImmediate: true)
         }
     }
 
@@ -585,9 +761,18 @@ private final class FloatcutSyncEngine {
         queue.async {
             if self.coordinator?.pairedPeer(deviceID)?.enabled != true {
                 self.connectionsByDeviceID[deviceID]?.cancel()
+                self.cancelRetry(deviceID: deviceID)
+                self.publishOnline()
             } else if let peer = self.discovered[deviceID] {
-                self.connectIfRequired(peer)
+                self.scheduleEligibleAttempt(for: peer)
             }
+        }
+    }
+
+    func peerAuthorizationChanged(deviceID: String) {
+        queue.async {
+            self.cancelRetry(deviceID: deviceID)
+            self.publishOnline()
         }
     }
 
@@ -607,7 +792,10 @@ private final class FloatcutSyncEngine {
             ]
             let message = FloatcutSyncWireMessage(type: "CLIPBOARD_UPDATE", fields: fields)
             // Deliberately no queue: this snapshot is the complete set of online trusted peers.
-            for connection in self.connectionsByDeviceID.values where connection.isTrusted && connection.peer?.enabled == true {
+            for (deviceID, connection) in self.connectionsByDeviceID {
+                guard connection.isTrusted, let peer = self.coordinator?.pairedPeer(deviceID), peer.enabled,
+                      self.coordinator?.revocation(for: deviceID) == nil,
+                      connection.peer?.certificateSHA256 == peer.certificateSHA256 else { continue }
                 connection.send(message)
             }
         }
@@ -671,33 +859,69 @@ private final class FloatcutSyncEngine {
             if let connection = self.connectionsByDeviceID[revocation.peerDeviceID] {
                 connection.sendUnpair(revocation)
             } else if let discovered = self.discovered[revocation.peerDeviceID] {
-                self.open(endpoint: discovered.endpoint, direction: .outgoingRevocation, expectedFingerprint: revocation.certificateSHA256)
+                self.open(endpoint: discovered.endpoint, direction: .outgoingRevocation,
+                          targetDeviceID: revocation.peerDeviceID, purpose: .revocation,
+                          expectedFingerprint: revocation.certificateSHA256, allowImmediate: true)
             }
         }
     }
 
-    private func startListener() throws {
+    private func startListener(generation: UInt64) throws {
         let parameters = makeTLSParameters()
         let listener = try NWListener(using: parameters, on: .any)
         listener.service = makeService()
         listener.stateUpdateHandler = { [weak self] state in
+            guard let self, !self.stopped, self.listenerGeneration == generation else { return }
             switch state {
             case .failed(let error):
-                self?.coordinator?.recordDiagnostic("listener_failed", ["detail": error.localizedDescription])
-                self?.coordinator?.showNetworkError(error.localizedDescription)
-            case .ready: break
+                self.coordinator?.recordDiagnostic("listener_failed", ["detail": error.localizedDescription])
+                self.listenerHealth = .failed(error.localizedDescription)
+                self.publishNetworkStatus()
+                self.scheduleListenerRecovery()
+            case .ready:
+                self.listenerRecoveryAttempts = 0
+                self.listenerHealth = .ready
+                self.coordinator?.recordDiagnostic("listener_ready")
+                self.publishNetworkStatus()
             default: break
             }
         }
         listener.newConnectionHandler = { [weak self] connection in
             self?.queue.async {
-                guard let self else { return }
+                guard let self, !self.stopped, self.listenerGeneration == generation else {
+                    connection.cancel()
+                    return
+                }
                 guard self.allowIncoming(connection.endpoint) else { connection.cancel(); return }
                 self.adopt(connection, direction: .incoming)
             }
         }
-        listener.start(queue: queue)
         self.listener = listener
+        listener.start(queue: queue)
+    }
+
+    private func scheduleListenerRecovery() {
+        listenerRecoveryTimer?.cancel()
+        listenerRecoveryAttempts = min(listenerRecoveryAttempts + 1, 6)
+        let delay = min(30, pow(2, Double(listenerRecoveryAttempts - 1)) * Double.random(in: 0.8...1.2))
+        let generation = listenerGeneration
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped, self.listenerGeneration == generation else { return }
+            self.listener?.cancel()
+            self.listener = nil
+            self.listenerGeneration &+= 1
+            do {
+                try self.startListener(generation: self.listenerGeneration)
+                self.coordinator?.recordDiagnostic("listener_recovery_started")
+            } catch {
+                self.coordinator?.recordDiagnostic("listener_recovery_failed", ["detail": error.localizedDescription])
+                self.scheduleListenerRecovery()
+            }
+        }
+        listenerRecoveryTimer = timer
+        timer.resume()
     }
 
     private func makeService() -> NWListener.Service {
@@ -718,50 +942,157 @@ private final class FloatcutSyncEngine {
         return NWListener.Service(name: name, type: FloatcutSyncProtocol.serviceType, domain: nil, txtRecord: txt)
     }
 
-    private func startBrowser() {
+    private func startBrowser(generation: UInt64) {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: FloatcutSyncProtocol.serviceType, domain: nil), using: parameters)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            self?.handleBrowseResults(results)
+            guard let self, !self.stopped, self.browserGeneration == generation else { return }
+            self.handleBrowseResults(results)
         }
         browser.stateUpdateHandler = { [weak self] state in
+            guard let self, !self.stopped, self.browserGeneration == generation else { return }
             if case .waiting(let error) = state {
-                self?.coordinator?.showNetworkError(String(format: NSLocalizedString("Local network access is waiting: %@", comment: ""), error.localizedDescription))
+                self.browserHealth = .waiting(String(format: NSLocalizedString("Local network access is waiting: %@", comment: ""), error.localizedDescription))
+                self.publishNetworkStatus()
             } else if case .failed(let error) = state {
-                self?.coordinator?.showNetworkError(error.localizedDescription)
+                self.browserHealth = .failed(error.localizedDescription)
+                self.publishNetworkStatus()
+                self.scheduleBrowserRecovery()
+            } else if case .ready = state {
+                self.browserRecoveryAttempts = 0
+                self.browserHealth = .ready
+                self.coordinator?.recordDiagnostic("browser_ready")
+                self.publishNetworkStatus()
             }
         }
-        browser.start(queue: queue)
         self.browser = browser
+        browser.start(queue: queue)
+    }
+
+    /// NWBrowser may stay `.ready` after an interface disappears while its
+    /// results no longer include services reachable on another interface.
+    /// Watch Wi-Fi and wired paths independently: the default route may remain
+    /// on Ethernet, so a default-path monitor need not notice Wi-Fi loss.
+    private func startInterfaceMonitors() {
+        for (key, type) in [("wifi", NWInterface.InterfaceType.wifi),
+                            ("wired", NWInterface.InterfaceType.wiredEthernet)] {
+            let monitor = NWPathMonitor(requiredInterfaceType: type)
+            monitor.pathUpdateHandler = { [weak self] path in
+                guard let self, !self.stopped else { return }
+                let interfaces = path.availableInterfaces.map(\.name).sorted().joined(separator: ",")
+                let signature = "\(path.status):\(interfaces):\(path.supportsIPv4):\(path.supportsIPv6)"
+                let previous = self.interfacePathSignatures.updateValue(signature, forKey: key)
+                guard let previous, previous != signature else { return }
+                self.scheduleInterfaceBrowserRecovery()
+            }
+            interfaceMonitors.append(monitor)
+            monitor.start(queue: queue)
+        }
+    }
+
+    private func scheduleInterfaceBrowserRecovery() {
+        interfaceRecoveryWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.browserRecoveryTimer?.cancel()
+            self.browserRecoveryTimer = nil
+            self.browserGeneration &+= 1
+            self.browser?.cancel()
+            self.browser = nil
+            for deviceID in self.discovered.keys {
+                self.cancelRetry(deviceID: deviceID, keepDeadline: true)
+            }
+            self.discovered.removeAll()
+            self.discoveryObservations.removeAll()
+            self.coordinator?.updateDiscovery([], epoch: self.epoch, revision: self.nextSnapshotRevision())
+            self.browserHealth = .starting
+            self.publishNetworkStatus()
+            self.startBrowser(generation: self.browserGeneration)
+            self.coordinator?.recordDiagnostic("browser_interface_recovery_started")
+        }
+        interfaceRecoveryWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + 1, execute: workItem)
+    }
+
+    private func scheduleBrowserRecovery() {
+        browserRecoveryTimer?.cancel()
+        browserRecoveryAttempts = min(browserRecoveryAttempts + 1, 6)
+        let delay = min(30, pow(2, Double(browserRecoveryAttempts - 1)) * Double.random(in: 0.8...1.2))
+        let generation = browserGeneration
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped, self.browserGeneration == generation else { return }
+            self.browser?.cancel()
+            self.browser = nil
+            self.browserGeneration &+= 1
+            self.startBrowser(generation: self.browserGeneration)
+            self.coordinator?.recordDiagnostic("browser_recovery_started")
+        }
+        browserRecoveryTimer = timer
+        timer.resume()
     }
 
     private func handleBrowseResults(_ results: Set<NWBrowser.Result>) {
-        var newPeers: [String: FloatcutDiscoveredPeer] = [:]
+        var newObservations: [String: [String: FloatcutDiscoveredPeer]] = [:]
         for result in results {
-            guard case .service(let name, _, _, _) = result.endpoint,
+            guard case .service(let name, let type, let domain, let advertisedInterface) = result.endpoint,
                   case .bonjour(let txt) = result.metadata,
                   let values = Self.normalizedTXTValues(txt),
                   let deviceID = values["id"], FloatcutSyncProtocol.isCanonicalUUID(deviceID), deviceID != identity.deviceID,
                   let pvString = values["pv"], let pv = Int(pvString),
                   let platform = values["platform"], FloatcutSyncProtocol.isPlatformIdentifier(platform),
                   let caps = values["caps"]?.split(separator: ",").map(String.init),
-                  let pair = values["pair"], pair == "0" || pair == "1"
+                  let pair = values["pair"], pair == "0" || pair == "1",
+                  pv == FloatcutSyncProtocol.version,
+                  caps == FloatcutSyncProtocol.capabilities
             else { continue }
-            newPeers[deviceID] = FloatcutDiscoveredPeer(
-                deviceID: deviceID,
-                name: FloatcutSyncProtocol.truncateDeviceName(name),
-                platform: platform,
-                protocolVersion: pv,
-                capabilities: caps,
-                allowsPairing: pair == "1",
-                endpoint: result.endpoint
-            )
+            // A single DNS-SD result may be visible on several interfaces.
+            // Give each route its own scoped service endpoint so a failed route
+            // cannot overwrite another route to the same device ID.
+            let interfaces: [NWInterface?] = result.interfaces.isEmpty
+                ? [advertisedInterface] : result.interfaces.map(Optional.some)
+            for interface in interfaces {
+                let scopedEndpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: interface)
+                let peer = FloatcutDiscoveredPeer(
+                    deviceID: deviceID,
+                    name: FloatcutSyncProtocol.truncateDeviceName(name),
+                    platform: platform,
+                    protocolVersion: pv,
+                    capabilities: caps,
+                    allowsPairing: pair == "1",
+                    endpoint: scopedEndpoint
+                )
+                let observationKey = Self.observationKey(for: scopedEndpoint)
+                newObservations[deviceID, default: [:]][observationKey] = peer
+            }
+        }
+        let previousObservations = discoveryObservations
+        discoveryObservations = newObservations
+        var newPeers: [String: FloatcutDiscoveredPeer] = [:]
+        for (deviceID, observations) in newObservations {
+            guard let selected = observations.sorted(by: { $0.key < $1.key }).first?.value else { continue }
+            newPeers[deviceID] = selected
+            if previousObservations[deviceID]?.keys.sorted() != observations.keys.sorted() {
+                coordinator?.recordDiagnostic("discovery_endpoint_changed", ["peer": String(deviceID.prefix(8)), "observation_count": String(observations.count)])
+            }
         }
         discovered = newPeers
         coordinator?.recordDiagnostic("bonjour_results", ["compatible_peer_count": String(newPeers.count)])
-        coordinator?.updateDiscovery(Array(newPeers.values))
-        for peer in newPeers.values { connectIfRequired(peer) }
+        coordinator?.updateDiscovery(Array(newPeers.values), epoch: epoch, revision: nextSnapshotRevision())
+        publishNetworkStatus()
+        for deviceID in Set(previousObservations.keys).subtracting(newObservations.keys) {
+            cancelRetry(deviceID: deviceID, keepDeadline: true)
+        }
+        for connection in connectionsByID.values where !connection.isTrusted {
+            guard let attempt = connection.networkAttempt,
+                  previousObservations[attempt.targetDeviceID]?[attempt.endpointKey] != nil,
+                  newObservations[attempt.targetDeviceID]?[attempt.endpointKey] == nil else { continue }
+            coordinator?.recordDiagnostic("discovery_attempt_endpoint_removed", ["peer": String(attempt.targetDeviceID.prefix(8))])
+            connection.cancel()
+        }
+        for peer in newPeers.values { scheduleEligibleAttempt(for: peer) }
     }
 
     private static func normalizedTXTValues(_ record: NWTXTRecord) -> [String: String]? {
@@ -776,33 +1107,89 @@ private final class FloatcutSyncEngine {
         return values
     }
 
-    private func connectIfRequired(_ discoveredPeer: FloatcutDiscoveredPeer) {
-        if let pending = coordinator?.pendingPairing(peerDeviceID: discoveredPeer.deviceID),
-           pending.localIsInitiator ?? (identity.deviceID < discoveredPeer.deviceID) {
-            guard connectionsByDeviceID[discoveredPeer.deviceID] == nil else { return }
-            open(endpoint: discoveredPeer.endpoint, direction: .outgoingPairing, expectedFingerprint: pending.peerCertificateSHA256)
-            return
+    private static func observationKey(for endpoint: NWEndpoint) -> String {
+        guard case .service(let name, let type, let domain, let interface) = endpoint else {
+            return endpoint.debugDescription.lowercased()
         }
-        if let revocation = coordinator?.revocation(for: discoveredPeer.deviceID), !revocation.acknowledged {
-            guard connectionsByDeviceID[discoveredPeer.deviceID] == nil else { return }
-            open(endpoint: discoveredPeer.endpoint, direction: .outgoingRevocation, expectedFingerprint: revocation.certificateSHA256)
-            return
-        }
-        guard discoveredPeer.protocolVersion == FloatcutSyncProtocol.version,
-              discoveredPeer.capabilities == FloatcutSyncProtocol.capabilities,
-              let peer = coordinator?.pairedPeer(discoveredPeer.deviceID), peer.enabled,
-              identity.deviceID < peer.deviceID,
-              connectionsByDeviceID[peer.deviceID] == nil
-        else { return }
-        open(endpoint: discoveredPeer.endpoint, direction: .outgoingTrusted, expectedFingerprint: peer.certificateSHA256)
+        let rootDots = CharacterSet(charactersIn: ".")
+        let normalizedName = name.lowercased().trimmingCharacters(in: rootDots)
+        let normalizedType = type.lowercased().trimmingCharacters(in: rootDots)
+        let normalizedDomain = domain.lowercased().trimmingCharacters(in: rootDots)
+        return "\(normalizedName)|\(normalizedType)|\(normalizedDomain)|\(interface.map { String($0.index) } ?? "default")"
     }
 
-    private func open(endpoint: NWEndpoint, direction: FloatcutConnectionDirection, expectedFingerprint: String? = nil) {
-        coordinator?.recordDiagnostic("connection_opening", ["direction": direction.diagnosticName])
-        adopt(NWConnection(to: endpoint, using: makeTLSParameters(expectedFingerprint: expectedFingerprint)), direction: direction)
+    private func eligibleAutomaticAttempt(for peer: FloatcutDiscoveredPeer) -> (FloatcutConnectionDirection, FloatcutSyncAttemptPurpose, String?)? {
+        if let revocation = coordinator?.revocation(for: peer.deviceID), !revocation.acknowledged {
+            return (.outgoingRevocation, .revocation, revocation.certificateSHA256)
+        }
+        if let pending = coordinator?.pendingPairing(peerDeviceID: peer.deviceID) {
+            guard pending.localIsInitiator == true,
+                  coordinator?.pairedPeer(peer.deviceID)?.enabled != false else {
+                if pending.localIsInitiator == nil {
+                    coordinator?.recordDiagnostic("pairing_resume_requires_explicit_repair", ["peer": String(peer.deviceID.prefix(8))])
+                }
+                return nil
+            }
+            return (.outgoingPairing, .pairingResume, pending.peerCertificateSHA256)
+        }
+        guard let paired = coordinator?.pairedPeer(peer.deviceID), paired.enabled,
+              identity.deviceID < peer.deviceID else { return nil }
+        return (.outgoingTrusted, .trusted, paired.certificateSHA256)
     }
 
-    private func adopt(_ nwConnection: NWConnection, direction: FloatcutConnectionDirection) {
+    private func scheduleEligibleAttempt(for peer: FloatcutDiscoveredPeer) {
+        guard !stopped, let selectedPeer = nextCandidate(for: peer.deviceID),
+              let descriptor = eligibleAutomaticAttempt(for: selectedPeer),
+              !isDeviceOccupied(selectedPeer.deviceID) else { return }
+        let scheduler = schedulers[selectedPeer.deviceID] ?? FloatcutSyncPeerScheduler()
+        schedulers[selectedPeer.deviceID] = scheduler
+        let now = clock.now()
+        guard scheduler.canStart(now: now, eligible: true) else {
+            if scheduler.nextAttemptAt > now { armRetry(deviceID: selectedPeer.deviceID, deadline: scheduler.nextAttemptAt) }
+            return
+        }
+        open(endpoint: selectedPeer.endpoint, direction: descriptor.0, targetDeviceID: selectedPeer.deviceID,
+             purpose: descriptor.1, expectedFingerprint: descriptor.2, allowImmediate: false)
+    }
+
+    private func nextCandidate(for deviceID: String) -> FloatcutDiscoveredPeer? {
+        let candidates = (discoveryObservations[deviceID] ?? [:]).sorted { $0.key < $1.key }
+        guard !candidates.isEmpty else { return nil }
+        if let preferred = preferredEndpointKeys[deviceID], let match = candidates.first(where: { $0.key == preferred }) {
+            return match.value
+        }
+        let index = candidateIndices[deviceID, default: 0] % candidates.count
+        return candidates[index].value
+    }
+
+    private func open(endpoint: NWEndpoint, direction: FloatcutConnectionDirection, targetDeviceID: String,
+                      purpose: FloatcutSyncAttemptPurpose, expectedFingerprint: String?, allowImmediate: Bool) {
+        guard !stopped, !isDeviceOccupied(targetDeviceID) else { return }
+        let scheduler = schedulers[targetDeviceID] ?? FloatcutSyncPeerScheduler()
+        schedulers[targetDeviceID] = scheduler
+        let now = clock.now()
+        guard scheduler.canStart(now: now, eligible: true, allowImmediate: allowImmediate) else { return }
+        let attemptID = UUID()
+        guard scheduler.reserve(attemptID) else { return }
+        let attempt = FloatcutSyncAttempt(engineEpoch: epoch, id: attemptID, targetDeviceID: targetDeviceID,
+                                          purpose: purpose, endpointKey: Self.observationKey(for: endpoint),
+                                          expectedPin: expectedFingerprint, startedAt: now,
+                                          establishmentDeadline: now + 15)
+        outgoingReservations[targetDeviceID] = attemptID
+        coordinator?.recordDiagnostic("connection_opening", ["direction": direction.diagnosticName,
+            "purpose": purpose.rawValue, "peer": String(targetDeviceID.prefix(8))])
+        adopt(NWConnection(to: endpoint, using: makeTLSParameters(expectedFingerprint: expectedFingerprint, securityTarget: targetDeviceID)),
+              direction: direction, attempt: attempt)
+    }
+
+    private func adopt(_ nwConnection: NWConnection, direction: FloatcutConnectionDirection,
+                       attempt: FloatcutSyncAttempt? = nil) {
+        if direction == .incoming,
+           connectionsByID.values.filter({ $0.isIncomingPreHello }).count >= 32 {
+            coordinator?.recordDiagnostic("incoming_prehello_limit_reached")
+            nwConnection.cancel()
+            return
+        }
         let connection = FloatcutPeerConnection(
             connection: nwConnection,
             direction: direction,
@@ -810,30 +1197,50 @@ private final class FloatcutSyncEngine {
             registry: handshakeRegistry,
             engine: self,
             coordinator: coordinator,
-            queue: queue
+            queue: queue,
+            clock: clock,
+            attempt: attempt
         )
         connectionsByID[connection.id] = connection
         connection.start()
     }
 
     fileprivate func didIdentify(_ connection: FloatcutPeerConnection, deviceID: String) -> Bool {
-        guard connectionsByDeviceID[deviceID] == nil else {
+        guard connection.engineEpoch == epoch,
+              connection.targetDeviceID == nil || connection.targetDeviceID == deviceID else {
+            connection.markSecurityFailure()
+            coordinator?.recordDiagnostic("connection_rejected_target_identity", ["peer": String(deviceID.prefix(8))])
+            return false
+        }
+        if let incumbent = connectionsByDeviceID[deviceID], incumbent !== connection {
+            if incumbent.isClosingOrEnded || incumbent.isPastReceiveDeadline {
+                incumbent.cancel()
+                connectionsByDeviceID.removeValue(forKey: deviceID)
+            } else {
+                coordinator?.recordDiagnostic("connection_rejected_duplicate", ["peer": String(deviceID.prefix(8))])
+                return false
+            }
+        }
+        if let reservation = outgoingReservations[deviceID], reservation != connection.attemptID {
             coordinator?.recordDiagnostic("connection_rejected_duplicate", ["peer": String(deviceID.prefix(8))])
             return false
         }
         connectionsByDeviceID[deviceID] = connection
+        if let attemptID = connection.attemptID, outgoingReservations[deviceID] == attemptID {
+            outgoingReservations.removeValue(forKey: deviceID)
+        }
         coordinator?.recordDiagnostic("peer_identified", ["peer": String(deviceID.prefix(8)), "direction": connection.directionName])
         publishOnline()
         return true
     }
 
     fileprivate func didBecomeTrusted(_ connection: FloatcutPeerConnection) {
-        reconnectAttempts[connection.peerDeviceID ?? ""] = 0
-        if let name = connection.peer?.name {
-            coordinator?.showNetworkError(
-                String(format: NSLocalizedString("Connected to %@.", comment: ""), name)
-            )
+        if let deviceID = connection.peerDeviceID {
+            schedulers[deviceID]?.succeed()
+            cancelRetry(deviceID: deviceID)
+            if let endpointKey = connection.networkAttempt?.endpointKey { preferredEndpointKeys[deviceID] = endpointKey }
         }
+        publishNetworkStatus()
         coordinator?.recordDiagnostic("pairing_trusted", ["peer": String((connection.peerDeviceID ?? "").prefix(8))])
         publishOnline()
     }
@@ -849,31 +1256,83 @@ private final class FloatcutSyncEngine {
     fileprivate func connectionEnded(_ connection: FloatcutPeerConnection) {
         coordinator?.recordDiagnostic("connection_ended", ["peer": String((connection.peerDeviceID ?? "unknown").prefix(8)), "direction": connection.directionName])
         connectionsByID.removeValue(forKey: connection.id)
-        if let deviceID = connection.peerDeviceID, connectionsByDeviceID[deviceID] === connection {
+        let deviceID = connection.peerDeviceID ?? connection.targetDeviceID
+        if let deviceID, let attemptID = connection.attemptID,
+           outgoingReservations[deviceID] == attemptID {
+            outgoingReservations.removeValue(forKey: deviceID)
+            schedulers[deviceID]?.releaseReservation(attemptID)
+        }
+        if let deviceID, connectionsByDeviceID[deviceID] === connection {
             connectionsByDeviceID.removeValue(forKey: deviceID)
-            scheduleReconnect(deviceID: deviceID)
+        }
+        if let deviceID,
+           connection.purpose?.automaticallyRetries == true ||
+            coordinator?.revocation(for: deviceID)?.acknowledged == false ||
+            (connection.purpose == .newPairing && coordinator?.pendingPairing(peerDeviceID: deviceID)?.localIsInitiator == true) {
+            if connection.hasSecurityFailure {
+                securitySuspendedDeviceIDs.insert(deviceID)
+                schedulers[deviceID]?.suspendForSecurity()
+                cancelRetry(deviceID: deviceID)
+            } else {
+                scheduleReconnect(deviceID: deviceID)
+            }
         }
         publishOnline()
     }
 
     private func scheduleReconnect(deviceID: String) {
-        guard !stopped, discovered[deviceID] != nil,
-              coordinator?.pairedPeer(deviceID)?.enabled == true,
-              identity.deviceID < deviceID
-        else { return }
-        let attempt = min((reconnectAttempts[deviceID] ?? 0) + 1, 6)
-        reconnectAttempts[deviceID] = attempt
-        let base = min(pow(2.0, Double(attempt - 1)), 30)
-        let delay = min(30, base * Double.random(in: 0.8...1.2))
-        queue.asyncAfter(deadline: .now() + delay) {
-            guard self.connectionsByDeviceID[deviceID] == nil, let peer = self.discovered[deviceID] else { return }
-            self.connectIfRequired(peer)
+        guard !stopped, let peer = discovered[deviceID],
+              eligibleAutomaticAttempt(for: peer) != nil,
+              !isDeviceOccupied(deviceID),
+              !securitySuspendedDeviceIDs.contains(deviceID) else { return }
+        let scheduler = schedulers[deviceID] ?? FloatcutSyncPeerScheduler()
+        schedulers[deviceID] = scheduler
+        let candidateCount = discoveryObservations[deviceID]?.count ?? 0
+        if candidateCount > 1 {
+            candidateIndices[deviceID] = (candidateIndices[deviceID, default: 0] + 1) % candidateCount
+            preferredEndpointKeys.removeValue(forKey: deviceID)
         }
+        let deadline = scheduler.recordAutomaticFailure(now: clock.now(), randomMultiplier: Double.random(in: 0.8...1.2))
+        coordinator?.recordDiagnostic("retry_scheduled", ["peer": String(deviceID.prefix(8)),
+            "attempt": String(scheduler.failures), "deadline_seconds": String(format: "%.3f", deadline)])
+        armRetry(deviceID: deviceID, deadline: deadline)
     }
 
     private func publishOnline() {
-        let ids = Set(connectionsByDeviceID.compactMap { $0.value.isTrusted ? $0.key : nil })
-        coordinator?.updateOnline(ids)
+        let ids = Set(connectionsByDeviceID.compactMap { deviceID, connection -> String? in
+            guard connection.isTrusted,
+                  coordinator?.pairedPeer(deviceID)?.enabled == true,
+                  coordinator?.revocation(for: deviceID) == nil else { return nil }
+            return deviceID
+        })
+        coordinator?.updateOnline(ids, epoch: epoch, revision: nextSnapshotRevision())
+    }
+
+    private func isDeviceOccupied(_ deviceID: String) -> Bool {
+        connectionsByDeviceID[deviceID] != nil || outgoingReservations[deviceID] != nil
+    }
+
+    private func armRetry(deviceID: String, deadline: TimeInterval) {
+        retryTimers[deviceID]?.cancel()
+        let scheduler = schedulers[deviceID] ?? FloatcutSyncPeerScheduler()
+        schedulers[deviceID] = scheduler
+        let generation = scheduler.generation
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + max(0, deadline - clock.now()))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped, self.schedulers[deviceID]?.generation == generation else { return }
+            self.retryTimers.removeValue(forKey: deviceID)
+            guard let peer = self.discovered[deviceID] else { return }
+            self.scheduleEligibleAttempt(for: peer)
+        }
+        retryTimers[deviceID] = timer
+        timer.resume()
+    }
+
+    private func cancelRetry(deviceID: String, keepDeadline: Bool = false) {
+        retryTimers.removeValue(forKey: deviceID)?.cancel()
+        if keepDeadline { schedulers[deviceID]?.discoveryLost() }
+        else { schedulers[deviceID]?.invalidateTimer() }
     }
 
     private func allowIncoming(_ endpoint: NWEndpoint) -> Bool {
@@ -888,7 +1347,7 @@ private final class FloatcutSyncEngine {
         return true
     }
 
-    private func makeTLSParameters(expectedFingerprint: String? = nil) -> NWParameters {
+    private func makeTLSParameters(expectedFingerprint: String? = nil, securityTarget: String? = nil) -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(options, .TLSv13)
@@ -899,6 +1358,7 @@ private final class FloatcutSyncEngine {
         }
         let registry = handshakeRegistry
         weak var coordinator = coordinator
+        weak var engine = self
         sec_protocol_options_set_verify_block(options, { _, trust, complete in
             let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
             guard let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
@@ -915,7 +1375,13 @@ private final class FloatcutSyncEngine {
                   (knownPeer == nil || knownPeer?.certificateSHA256 == fingerprint),
                   registry.record(certificate: certificate, deviceID: deviceID)
             else {
-                if let knownPeer { coordinator?.reportIdentityMismatch(deviceID: deviceID, name: knownPeer.name) }
+                if let securityTarget {
+                    engine?.securitySuspendedDeviceIDs.insert(securityTarget)
+                    engine?.schedulers[securityTarget]?.suspendForSecurity()
+                }
+                if let knownPeer, let engine {
+                    coordinator?.reportIdentityMismatch(deviceID: deviceID, name: knownPeer.name, epoch: engine.epochValue)
+                }
                 complete(false)
                 return
             }
@@ -1090,14 +1556,18 @@ private final class FloatcutPeerConnection {
     private unowned let engine: FloatcutSyncEngine
     private weak var coordinator: FloatcutSyncCoordinator?
     private let queue: DispatchQueue
+    private let clock: FloatcutSyncElapsedClock
+    private let attempt: FloatcutSyncAttempt?
+    private let establishmentStartedAt: TimeInterval
     private var decoder = FloatcutSyncFrameDecoder()
     private var state: FloatcutPeerConnectionState = .awaitingHello
     private var didSendHello = false
     private var didReceiveHello = false
     private var ended = false
-    private var lastReceived = Date()
-    private var lastSent = Date()
+    private var liveness: FloatcutSyncLiveness
     private var keepaliveTimer: DispatchSourceTimer?
+    private var receivePauseTimer: DispatchSourceTimer?
+    private var receivePauseStartedAt: TimeInterval?
     private var replay = FloatcutReplayCache()
     private var tlsContext: FloatcutTLSPeerContext?
     private(set) var peerDeviceID: String?
@@ -1119,10 +1589,20 @@ private final class FloatcutPeerConnection {
     private let imagePreparation = FloatcutSyncImagePreparation()
     private var imageTimeoutGeneration = 0
     private var incomingImageTimer: DispatchSourceTimer?
+    private var revocationACKTimer: DispatchSourceTimer?
 
     var isTrusted: Bool { state == .trusted }
     var isPairing: Bool { state == .pairing }
     var directionName: String { direction.diagnosticName }
+    var targetDeviceID: String? { attempt?.targetDeviceID }
+    var attemptID: UUID? { attempt?.id }
+    var purpose: FloatcutSyncAttemptPurpose? { attempt?.purpose }
+    var networkAttempt: FloatcutSyncAttempt? { attempt }
+    var engineEpoch: UInt64 { attempt?.engineEpoch ?? engine.epochValue }
+    var isIncomingPreHello: Bool { direction == .incoming && !didReceiveHello && !ended }
+    var isClosingOrEnded: Bool { ended || state == .closing }
+    var isPastReceiveDeadline: Bool { liveness.isExpired(at: clock.now()) }
+    private(set) var hasSecurityFailure = false
 
     init(
         connection: NWConnection,
@@ -1131,7 +1611,9 @@ private final class FloatcutPeerConnection {
         registry: FloatcutTLSHandshakeRegistry,
         engine: FloatcutSyncEngine,
         coordinator: FloatcutSyncCoordinator?,
-        queue: DispatchQueue
+        queue: DispatchQueue,
+        clock: FloatcutSyncElapsedClock,
+        attempt: FloatcutSyncAttempt?
     ) {
         self.connection = connection
         self.direction = direction
@@ -1140,20 +1622,32 @@ private final class FloatcutPeerConnection {
         self.engine = engine
         self.coordinator = coordinator
         self.queue = queue
+        self.clock = clock
+        self.attempt = attempt
+        establishmentStartedAt = clock.now()
+        liveness = FloatcutSyncLiveness(now: establishmentStartedAt)
     }
 
+    func markSecurityFailure() { hasSecurityFailure = true }
+
     func start() {
-        clipboardInbox.didProgress = { [weak self] in self?.receiveNext() }
+        clipboardInbox.didProgress = { [weak self] in
+            guard let self else { return }
+            if self.clipboardInbox.canReceive { self.clearReceivePause() }
+            self.receiveNext()
+        }
         connection.stateUpdateHandler = { [weak self] state in self?.handleConnectionState(state) }
         connection.start(queue: queue)
+        let expectedAttemptID = attempt?.id
         queue.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self, !self.ended, self.state == .awaitingHello else { return }
+            guard let self, !self.ended, self.state == .awaitingHello,
+                  self.attempt?.id == expectedAttemptID || expectedAttemptID == nil else { return }
             self.coordinator?.recordDiagnostic(
                 "connection_establishment_timed_out",
                 ["direction": self.direction.diagnosticName]
             )
             if self.direction == .outgoingPairing {
-                self.coordinator?.showNetworkError(
+                self.engine.reportNetworkMessage(
                     NSLocalizedString("The pairing connection timed out. Please try again.", comment: "")
                 )
             }
@@ -1169,6 +1663,10 @@ private final class FloatcutPeerConnection {
         cleanupIncomingImage(event: "v2_image_receive_cleanup")
         outgoingImage = nil
         imageTimeoutGeneration += 1
+        receivePauseTimer?.cancel()
+        receivePauseTimer = nil
+        revocationACKTimer?.cancel()
+        revocationACKTimer = nil
         state = .closing
         connection.cancel()
     }
@@ -1184,7 +1682,8 @@ private final class FloatcutPeerConnection {
             connection.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 if error != nil { self.cancel() } else {
-                    self.lastSent = Date()
+                    self.liveness.sent(at: self.clock.now())
+                    self.scheduleLivenessDeadline()
                     completion?()
                 }
             })
@@ -1207,6 +1706,7 @@ private final class FloatcutPeerConnection {
             "revoked_at_ms": revocation.revokedAtMS,
             "reason": "user_request",
         ]))
+        armRevocationACKDeadline(revocationID: revocation.revocationID)
     }
 
     func reserveImagePreparation() -> FloatcutSyncWorkToken? {
@@ -1255,6 +1755,7 @@ private final class FloatcutPeerConnection {
         case .ready:
             coordinator?.recordDiagnostic("connection_ready", ["direction": direction.diagnosticName])
             guard captureTLSContext() else { cancel(); return }
+            liveness = FloatcutSyncLiveness(now: clock.now())
             sendHello()
             receiveNext()
             startKeepalive()
@@ -1312,7 +1813,10 @@ private final class FloatcutPeerConnection {
             if clipboardInbox.isEmpty { cancel() }
             return
         }
-        guard clipboardInbox.canReceive else { return }
+        guard clipboardInbox.canReceive else {
+            beginReceivePause()
+            return
+        }
         receiveInFlight = true
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
             guard let self, !self.ended, self.state != .closing else { return }
@@ -1322,7 +1826,8 @@ private final class FloatcutPeerConnection {
             self.receivedEOF = complete
             if error != nil { self.cancel(); return }
             if let data, !data.isEmpty {
-                self.lastReceived = Date()
+                self.liveness.received(at: self.clock.now())
+                self.scheduleLivenessDeadline()
                 do {
                     let started = FloatcutSyncDiagnostics.shared.startMeasurement()
                     let messages = try self.decoder.append(data)
@@ -1369,6 +1874,7 @@ private final class FloatcutPeerConnection {
                 }
             }
             self.handlingRead = false
+            if self.clipboardInbox.canReceive { self.clearReceivePause() }
             self.receiveNext()
         }
     }
@@ -1409,7 +1915,18 @@ private final class FloatcutPeerConnection {
         case "PONG": break
         case "UNPAIR": try handleUnpair(message)
         case "UNPAIR_ACK":
-            coordinator?.acknowledgeRevocation(try message.string("revocation_id"))
+            let revocationID = try message.string("revocation_id")
+            guard let deviceID = peerDeviceID,
+                  let revocation = coordinator?.revocation(for: deviceID),
+                  !revocation.acknowledged, revocation.revocationID == revocationID else {
+                throw FloatcutSyncProtocolError.invalidState
+            }
+            revocationACKTimer?.cancel()
+            revocationACKTimer = nil
+            guard coordinator?.acknowledgeRevocation(revocationID) == true else {
+                cancel()
+                return
+            }
             cancel()
         case "ERROR": break
         default: throw FloatcutSyncProtocolError.unknownMessageType(message.type)
@@ -1439,7 +1956,8 @@ private final class FloatcutPeerConnection {
         }
         if let peer = coordinator?.pairedPeer(deviceID) {
             guard peer.certificateSHA256 == fingerprint else {
-                coordinator?.reportIdentityMismatch(deviceID: deviceID, name: peerName)
+                markSecurityFailure()
+                coordinator?.reportIdentityMismatch(deviceID: deviceID, name: peerName, epoch: engine.epochValue)
                 sendError(code: "identity_mismatch", detail: "Pinned certificate changed", replyTo: message.messageID, close: true)
                 return
             }
@@ -1636,13 +2154,19 @@ private final class FloatcutPeerConnection {
         guard let session = pairing, let context = tlsContext, let peerDeviceID,
               let requestID = session.requestID, let transcript = session.transcriptSHA256
         else { throw FloatcutSyncProtocolError.invalidState }
+        // Retries and duplicate completion frames must retain the original
+        // pending-record deadline. Only a genuinely new transcript gets its
+        // ten-minute retention window.
+        let existing = coordinator?.pendingPairing(peerDeviceID: peerDeviceID)
+        let expiresAtMS = existing?.requestID == requestID && existing?.transcriptSHA256 == transcript
+            ? existing!.expiresAtMS : FloatcutSyncCoordinator.nowMS + 600_000
         try coordinator?.savePending(FloatcutSyncPendingPairing(
             requestID: requestID,
             peerDeviceID: peerDeviceID,
             peerCertificateSHA256: context.certificateSHA256,
             peerCertificateDERBase64: context.certificateDER.base64EncodedString(),
             transcriptSHA256: transcript,
-            expiresAtMS: FloatcutSyncCoordinator.nowMS + 600_000,
+            expiresAtMS: expiresAtMS,
             localIsInitiator: session.localIsInitiator,
             localConfirmed: session.localConfirmed,
             remoteConfirmed: session.remoteConfirmed,
@@ -1961,19 +2485,90 @@ private final class FloatcutPeerConnection {
         }
     }
 
-    private func startKeepalive() {
+    private func armRevocationACKDeadline(revocationID: String) {
+        revocationACKTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 10, repeating: 10)
+        timer.schedule(deadline: .now() + 15)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            if Date().timeIntervalSince(self.lastReceived) >= 90 {
-                self.cancel()
-            } else if Date().timeIntervalSince(self.lastSent) >= 30 {
-                self.send(FloatcutSyncWireMessage(type: "PING", fields: ["sent_at_ms": FloatcutSyncCoordinator.nowMS]))
-            }
+            guard let self, !self.ended else { return }
+            self.coordinator?.recordDiagnostic("revocation_ack_timed_out", [
+                "peer": String((self.peerDeviceID ?? self.targetDeviceID ?? "unknown").prefix(8)),
+                "revocation": String(revocationID.prefix(8)),
+            ])
+            self.cancel()
         }
+        revocationACKTimer = timer
         timer.resume()
+    }
+
+    private func startKeepalive() {
+        scheduleLivenessDeadline()
+    }
+
+    func reconcileLivenessAfterWake() {
+        guard !ended, state != .closing else { return }
+        if state == .awaitingHello,
+           clock.now() >= (attempt?.establishmentDeadline ?? establishmentStartedAt + 15) {
+            coordinator?.recordDiagnostic("connection_establishment_timed_out_after_wake", [
+                "direction": direction.diagnosticName
+            ])
+            cancel()
+            return
+        }
+        if liveness.isExpired(at: clock.now()) {
+            coordinator?.recordDiagnostic("peer_timeout_after_wake", [
+                "peer": String((peerDeviceID ?? targetDeviceID ?? "unknown").prefix(8))
+            ])
+            cancel()
+        } else {
+            scheduleLivenessDeadline()
+        }
+    }
+
+    private func scheduleLivenessDeadline() {
+        guard !ended, state != .closing else { return }
+        keepaliveTimer?.cancel()
+        let now = clock.now()
+        let deadline = liveness.nextDeadline()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + max(0, deadline - now))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.ended, self.state != .closing else { return }
+            let current = self.clock.now()
+            if self.liveness.isExpired(at: current) {
+                self.coordinator?.recordDiagnostic("peer_timeout", ["peer": String((self.peerDeviceID ?? self.targetDeviceID ?? "unknown").prefix(8))])
+                self.cancel()
+            } else if current >= self.liveness.pingDeadline() {
+                self.send(FloatcutSyncWireMessage(type: "PING", fields: ["sent_at_ms": FloatcutSyncCoordinator.nowMS]))
+                // `send` reschedules after the transport confirms the bytes.
+                // Reusing the old lastSent value here would immediately fire
+                // another PING timer before that completion arrives.
+                return
+            }
+            self.scheduleLivenessDeadline()
+        }
         keepaliveTimer = timer
+        timer.resume()
+    }
+
+    private func beginReceivePause() {
+        guard receivePauseStartedAt == nil else { return }
+        receivePauseStartedAt = clock.now()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 5)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.ended, !self.clipboardInbox.canReceive else { return }
+            self.coordinator?.recordDiagnostic("local_receive_overload", ["peer": String((self.peerDeviceID ?? self.targetDeviceID ?? "unknown").prefix(8))])
+            self.cancel()
+        }
+        receivePauseTimer = timer
+        timer.resume()
+    }
+
+    private func clearReceivePause() {
+        receivePauseStartedAt = nil
+        receivePauseTimer?.cancel()
+        receivePauseTimer = nil
     }
 
     private func handleProtocolError(_ error: FloatcutSyncProtocolError) {
@@ -2017,6 +2612,10 @@ private final class FloatcutPeerConnection {
         ended = true
         keepaliveTimer?.cancel()
         keepaliveTimer = nil
+        receivePauseTimer?.cancel()
+        receivePauseTimer = nil
+        revocationACKTimer?.cancel()
+        revocationACKTimer = nil
         engine.connectionEnded(self)
     }
 }

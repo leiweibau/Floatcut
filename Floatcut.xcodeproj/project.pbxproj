@@ -81,6 +81,7 @@
 		S20000012EB2000100000001 /* FloatcutSyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = S20000112EB2000100000001 /* FloatcutSyncProtocol.swift */; };
 		S20000022EB2000100000001 /* FloatcutSyncIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = S20000122EB2000100000001 /* FloatcutSyncIdentity.swift */; };
 		S20000032EB2000100000001 /* FloatcutSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = S20000132EB2000100000001 /* FloatcutSyncCoordinator.swift */; };
+		S20000062EB2000100000001 /* FloatcutSyncLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = S20000162EB2000100000001 /* FloatcutSyncLifecycle.swift */; };
 		S20000042EB2000100000001 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = S20000142EB2000100000001 /* Network.framework */; };
 		S20000052EB2000100000001 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = S20000152EB2000100000001 /* Security.framework */; };
 /* End PBXBuildFile section */
@@ -186,6 +187,7 @@
 		S20000112EB2000100000001 /* FloatcutSyncProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncProtocol.swift; sourceTree = "<group>"; };
 		S20000122EB2000100000001 /* FloatcutSyncIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncIdentity.swift; sourceTree = "<group>"; };
 		S20000132EB2000100000001 /* FloatcutSyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncCoordinator.swift; sourceTree = "<group>"; };
+		S20000162EB2000100000001 /* FloatcutSyncLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncLifecycle.swift; sourceTree = "<group>"; };
 		S20000142EB2000100000001 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
 		S20000152EB2000100000001 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -239,6 +241,7 @@
 				A30000112EB2000100000001 /* FloatcutSyncWork.swift */,
 				S20000122EB2000100000001 /* FloatcutSyncIdentity.swift */,
 				S20000132EB2000100000001 /* FloatcutSyncCoordinator.swift */,
+				S20000162EB2000100000001 /* FloatcutSyncLifecycle.swift */,
 			);
 			path = Sync;
 			sourceTree = "<group>";
@@ -542,6 +545,7 @@
 				A30000012EB2000100000001 /* FloatcutSyncWork.swift in Sources */,
 				S20000022EB2000100000001 /* FloatcutSyncIdentity.swift in Sources */,
 				S20000032EB2000100000001 /* FloatcutSyncCoordinator.swift in Sources */,
+				S20000062EB2000100000001 /* FloatcutSyncLifecycle.swift in Sources */,
 				8D11072D0486CEB800E47090 /* main.m in Sources */,
 				AABE497C09FF9CD000A6A239 /* AppController.m in Sources */,
 				F10000022EB1000100000001 /* FloatcutLocalization.m in Sources */,
@@ -654,7 +658,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4.0;
+				CURRENT_PROJECT_VERSION = 4.0.1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9478A8FXT3;
 				ENABLE_APP_SANDBOX = NO;
@@ -682,7 +686,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
-				MARKETING_VERSION = 4.0;
+				MARKETING_VERSION = 4.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = de.meierkarsten.floatcut;
 				PRODUCT_MODULE_NAME = Floatcut;
 				PRODUCT_NAME = Floatcut;
@@ -709,7 +713,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4.0;
+				CURRENT_PROJECT_VERSION = 4.0.1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9478A8FXT3;
 				ENABLE_APP_SANDBOX = NO;
@@ -734,7 +738,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
-				MARKETING_VERSION = 4.0;
+				MARKETING_VERSION = 4.0.1;
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = de.meierkarsten.floatcut;
 				PRODUCT_MODULE_NAME = Floatcut;

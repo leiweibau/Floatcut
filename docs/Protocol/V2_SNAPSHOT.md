@@ -14,3 +14,7 @@ Source paths:
 Before changing a wire-level value, update the shared specification and its
 fixtures first. A local comparison can be performed with `diff -rq` for the two
 schema and fixture directories and `diff -u` for the Markdown files.
+
+The separate [cross-platform discovery and online-state implementation
+specification](ONLINE_DISCOVERY_IMPLEMENTATION.md) records operational requirements
+and review findings. It is not part of the copied wire-protocol snapshot.

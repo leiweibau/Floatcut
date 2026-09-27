@@ -727,7 +727,7 @@ private struct GeneralPreferencesView: View {
     @AppStorage("favoritesRememberNum") private var favoritesRememberNum = 40
     @AppStorage("displayNum") private var displayNum = 10
     @AppStorage("savePreference") private var savePreference = 1
-    @AppStorage("removeDuplicates") private var removeDuplicates = false
+    @AppStorage("removeDuplicates") private var removeDuplicates = true
     @AppStorage("pasteMovesToTop") private var pasteMovesToTop = false
     @AppStorage("skipPasswordFields") private var skipPasswordFields = true
     @AppStorage("skipPasswordLengths") private var skipPasswordLengths = false
@@ -1347,6 +1347,12 @@ private struct DiagnosticsPreferencesView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    Divider()
+                    Button("Restart Bonjour/mDNS") { sync.restartBonjourDiscovery() }
+                        .disabled(!sync.isEnabled)
+                    Text("Restarts Floatcut's device discovery and service announcement without deleting pairings or clipboard history. Local sync must be enabled.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Divider()
                     Button("Clear revocation list", role: .destructive) {
                         confirmClearRevocations = true

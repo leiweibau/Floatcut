@@ -53,8 +53,8 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
 		@"skipPasswordLengthsList",
 		[NSNumber numberWithBool:NO],
 		@"revealPasteboardTypes",
-        [NSNumber numberWithBool:NO],
-        @"removeDuplicates",
+		[NSNumber numberWithBool:YES],
+		@"removeDuplicates",
         [NSNumber numberWithBool:NO],
         @"pasteMovesToTop",
         nil]];
@@ -499,24 +499,42 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
                                                       withAppLocalizedName:appName
                                                           withAppBundleURL:bundleURL
                                                              withTimestamp:[[NSDate date] timeIntervalSince1970]];
-    if ([clippingStore jcListCount] == 0 || ![newClipping isEqual:[clippingStore clippingAtPosition:0]]) {
-        [clippingStore addClipping:newClipping];
-        stackPosition = 0;
-        [selectorTarget performSelector:clippingAddedSelector];
-        [self actionAfterListModification];
-        [newClipping release];
-        return YES;
-    }
+	[clippingStore addClipping:newClipping];
+	stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	[newClipping release];
+	return YES;
+}
 
-    [newClipping release];
-    return NO;
+-(bool)addCapturedImageClippingData:(NSData *)imageData ofType:(NSString *)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
+{
+	FloatcutStore *store = [self primaryStore];
+	if (!store || [imageData length] == 0)
+		return NO;
+
+	FloatcutClipping *clipping = [[FloatcutClipping alloc] initWithContents:@""
+											withType:type
+									 withImageData:imageData
+								   withDisplayLength:displayLength
+								withAppLocalizedName:appName
+									withAppBundleURL:bundleURL
+									   withTimestamp:[[NSDate date] timeIntervalSince1970]];
+	[store addClipping:clipping];
+	[clipping release];
+	if ([self favoritesStoreIsSelected])
+		stashedStackPosition = 0;
+	else
+		stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	return YES;
 }
 
 -(bool)addRemoteTextClipping:(NSString *)contents ofType:(NSString *)type fromApp:(NSString *)appName target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
 {
 	FloatcutStore *store = [self primaryStore];
-	if (!store || [contents length] == 0 ||
-		([store jcListCount] > 0 && [contents isEqualToString:[store clippingContentsAtPosition:0]]))
+	if (!store || [contents length] == 0)
 		return NO;
 
 	FloatcutClipping *clipping = [[FloatcutClipping alloc] initWithContents:contents
@@ -550,10 +568,6 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
 										withAppLocalizedName:appName
 											withAppBundleURL:nil
 											   withTimestamp:[[NSDate date] timeIntervalSince1970]];
-	if ([store jcListCount] > 0 && [clipping isEqual:[store clippingAtPosition:0]]) {
-		[clipping release];
-		return NO;
-	}
 	[clipping setReceivedFromSync:YES];
 	[store addClipping:clipping];
 	[clipping release];
@@ -583,7 +597,11 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
 	{
 		// Check to see if they want a little help figuring out what types to enter.
 		if ( diagnosePasteboardType && [[NSUserDefaults standardUserDefaults] boolForKey:@"revealPasteboardTypes"] ) {
-			[clippingStore addClipping:type ofType:type fromAppLocalizedName:@"Floatcut" fromAppBundleURL:nil atTimestamp:0];
+			[[self primaryStore] addClipping:type ofType:type fromAppLocalizedName:@"Floatcut" fromAppBundleURL:nil atTimestamp:0];
+			if ([self favoritesStoreIsSelected])
+				stashedStackPosition = 0;
+			else
+				stackPosition = 0;
 			[self actionAfterListModification];
 		}
 
@@ -678,22 +696,43 @@ static const NSTimeInterval FloatcutDeferredSaveDelay = 0.75;
 
 -(bool)addClipping:(NSString*)contents ofType:(NSString*)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
 {
-	if ( [clippingStore jcListCount] == 0 || ! [contents isEqualToString:[clippingStore clippingContentsAtPosition:0]]) {
-		bool success = [clippingStore addClipping:contents
+	if ([contents length] == 0)
+		return NO;
+	bool success = [clippingStore addClipping:contents
 										   ofType:type
 							 fromAppLocalizedName:appName
 								 fromAppBundleURL:bundleURL
 									  atTimestamp:[[NSDate date] timeIntervalSince1970]];
 
-//		The below tracks our position down down down... Maybe as an option?
-//		if ( [clippingStore jcListCount] > 1 ) stackPosition++;
-		stackPosition = 0;
-        [selectorTarget performSelector:clippingAddedSelector];
-		[self actionAfterListModification];
+	if (!success)
+		return NO;
 
-		return success;
-    }
-	return  NO;
+	stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	return YES;
+}
+
+-(bool)addCapturedTextClipping:(NSString *)contents ofType:(NSString *)type fromApp:(NSString *)appName withAppBundleURL:(NSString *)bundleURL target:(id)selectorTarget clippingAddedSelector:(SEL)clippingAddedSelector
+{
+	FloatcutStore *store = [self primaryStore];
+	if (!store || [contents length] == 0)
+		return NO;
+
+	BOOL accepted = [store addClipping:contents
+							  ofType:type
+					fromAppLocalizedName:appName
+					   fromAppBundleURL:bundleURL
+						 atTimestamp:[[NSDate date] timeIntervalSince1970]];
+	if (!accepted)
+		return NO;
+	if ([self favoritesStoreIsSelected])
+		stashedStackPosition = 0;
+	else
+		stackPosition = 0;
+	[selectorTarget performSelector:clippingAddedSelector];
+	[self actionAfterListModification];
+	return YES;
 }
 
 - (void)willDeleteClippingFromStore:(id)store AtIndex:(int)index {

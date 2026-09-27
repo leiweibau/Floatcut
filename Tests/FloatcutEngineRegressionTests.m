@@ -114,10 +114,20 @@ static void testClippingIdentityAndImages(void)
                                                        withTimestamp:3];
     FCAssert(image.isImage, @"Image payloads must still be detected");
     FCAssert([image.displayString isEqualToString:@"Image"], @"Image display text changed");
+    FloatcutClipping *otherImageType = [[FloatcutClipping alloc] initWithContents:@""
+                                                                      withType:@"public.jpeg"
+                                                                 withImageData:imageData
+                                                             withDisplayLength:40
+                                                          withAppLocalizedName:@"Tests"
+                                                              withAppBundleURL:nil
+                                                                 withTimestamp:4];
+    FCAssert(![image isEqual:otherImageType],
+             @"Image clips with different pasteboard types must remain distinct");
 
     [first release];
     [second release];
     [image release];
+    [otherImageType release];
 }
 
 static void testStatusMenuRefreshCoalescing(void)
@@ -170,6 +180,20 @@ static void testStoreOrderSearchAndDuplicates(void)
     [store addClipping:@"three" ofType:@"text" fromAppLocalizedName:@"Tests" fromAppBundleURL:nil atTimestamp:5];
     FCAssert(store.jcListCount == 3, @"Moving a duplicate must not grow the store");
     FCAssert([[store clippingContentsAtPosition:0] isEqualToString:@"three"], @"Duplicate must move to the top");
+    NSString *replacedID = [[[store clippingAtPosition:0] identifier] copy];
+    [store addClipping:@"three" ofType:@"text" fromAppLocalizedName:@"Tests" fromAppBundleURL:nil atTimestamp:6];
+    FCAssert(store.jcListCount == 3 &&
+             ![[[store clippingAtPosition:0] identifier] isEqualToString:replacedID],
+             @"An enabled top duplicate must replace the old clip with a new identity");
+    [replacedID release];
+
+    [defaults setBool:NO forKey:@"removeDuplicates"];
+    NSString *previousTopID = [[[store clippingAtPosition:0] identifier] copy];
+    [store addClipping:@"three" ofType:@"text" fromAppLocalizedName:@"Tests" fromAppBundleURL:nil atTimestamp:7];
+    FCAssert(![[[store clippingAtPosition:0] identifier] isEqualToString:previousTopID] &&
+             [[[store clippingAtPosition:1] identifier] isEqualToString:previousTopID],
+             @"A disabled top duplicate must retain both copies");
+    [previousTopID release];
 
     if (previousRemoveDuplicates)
         [defaults setObject:previousRemoveDuplicates forKey:@"removeDuplicates"];
@@ -352,28 +376,51 @@ static void testRemoteImportsAlwaysUsePrimaryStore(void)
              @"Remote image import changed the favorite selection or count");
     FCAssert(observer.callbackCount == 3 && observer.sawRemoteMarker,
              @"Remote image marker must precede the callback");
-    FCAssert(![operator addRemoteImageClippingData:imageData ofType:@"public.png" fromApp:@"Sync: Test"
-                                          target:observer clippingAddedSelector:@selector(didImport)],
-             @"Consecutive duplicate remote image should be rejected");
-    FCAssert(observer.callbackCount == 3, @"Duplicate remote image caused an unnecessary UI callback");
+    NSString *firstImageID = [[[[operator primaryStore] clippingAtPosition:0] identifier] copy];
+    FCAssert([operator addRemoteImageClippingData:imageData ofType:@"public.png" fromApp:@"Sync: Test"
+                                         target:observer clippingAddedSelector:@selector(didImport)],
+             @"A new remote image copy should be accepted even when it matches the top clip");
+    FCAssert(observer.callbackCount == 4 && observer.sawRemoteMarker,
+             @"A repeated remote image should refresh the UI with its origin marker");
+    FCAssert(![[[[operator primaryStore] clippingAtPosition:0] identifier] isEqualToString:firstImageID],
+             @"A repeated remote image must have a new clip identity");
+    [firstImageID release];
 
     [operator setFavoritesStoreSelected:NO];
     FCAssert(operator.jcListCount == 3, @"Remote imports should obey the primary store capacity");
     FloatcutClipping *image = [operator getClippingFromIndex:0];
     FCAssert([image isImage] && [image receivedFromSync] && [[image imageData] isEqualToData:imageData],
              @"Remote image data or origin marker changed in the primary store");
-    FCAssert([[[operator getClippingFromIndex:1] contents] isEqualToString:@"second"],
-             @"Remote text order changed in the primary store");
+    FCAssert([[[operator getClippingFromIndex:1] imageData] isEqualToData:imageData] &&
+             [[[operator getClippingFromIndex:2] contents] isEqualToString:@"second"],
+             @"Repeated remote images should remain separate when duplicate removal is off");
     FCAssert([operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
                                     target:observer clippingAddedSelector:@selector(didImport)],
              @"A non-consecutive text entry should still be accepted");
     FCAssert(operator.jcListCount == 3, @"Remote text import exceeded the primary store capacity");
     FCAssert([[[operator getClippingFromIndex:0] contents] isEqualToString:@"second"],
              @"Newest remote text is not at the top");
-    FCAssert(![operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
-                                     target:observer clippingAddedSelector:@selector(didImport)],
-             @"Consecutive duplicate remote text should be rejected");
-    FCAssert(observer.callbackCount == 4, @"Duplicate remote text caused an unnecessary UI callback");
+    NSString *firstRepeatedTextID = [[[operator getClippingFromIndex:0] identifier] copy];
+    FCAssert([operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
+                                    target:observer clippingAddedSelector:@selector(didImport)],
+             @"A new remote text copy should be accepted even when it matches the top clip");
+    FCAssert(observer.callbackCount == 6 && observer.sawRemoteMarker,
+             @"A repeated remote text clip should refresh the UI with its origin marker");
+    FCAssert(operator.jcListCount == 3 &&
+             [[[operator getClippingFromIndex:1] identifier] isEqualToString:firstRepeatedTextID] &&
+             ![[[operator getClippingFromIndex:0] identifier] isEqualToString:firstRepeatedTextID],
+             @"Disabling duplicate removal must retain both consecutive remote copies");
+    [firstRepeatedTextID release];
+
+    [defaults setBool:YES forKey:@"removeDuplicates"];
+    NSString *previousTopID = [[[operator getClippingFromIndex:0] identifier] copy];
+    FCAssert([operator addRemoteTextClipping:@"second" ofType:@"text" fromApp:@"Sync: Test"
+                                    target:observer clippingAddedSelector:@selector(didImport)],
+             @"A matching top clip should be replaced when duplicate removal is enabled");
+    FCAssert(operator.jcListCount == 3 && observer.callbackCount == 7 &&
+             ![[[operator getClippingFromIndex:0] identifier] isEqualToString:previousTopID],
+             @"Replacing the top duplicate must keep capacity and use the new clip identity");
+    [previousTopID release];
 
     [operator setFavoritesStoreSelected:YES];
     FCAssert(operator.jcListCount == 1 &&
@@ -389,6 +436,89 @@ static void testRemoteImportsAlwaysUsePrimaryStore(void)
     }
     [favoriteID release];
     [observer release];
+    [operator release];
+    [saveTarget release];
+}
+
+static void testCapturedClipsAlwaysUsePrimaryStore(void)
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *keys = @[@"store", @"savePreference", @"rememberNum", @"favoritesRememberNum",
+                      @"removeDuplicates", @"skipPasswordFields", @"revealPasteboardTypes"];
+    NSMutableDictionary *previousValues = [NSMutableDictionary dictionary];
+    for (NSString *key in keys) {
+        id value = [defaults objectForKey:key];
+        if (value)
+            previousValues[key] = value;
+    }
+    [defaults setObject:@{} forKey:@"store"];
+    [defaults setInteger:0 forKey:@"savePreference"];
+    [defaults setInteger:6 forKey:@"rememberNum"];
+    [defaults setInteger:4 forKey:@"favoritesRememberNum"];
+    [defaults setBool:YES forKey:@"removeDuplicates"];
+    [defaults setBool:YES forKey:@"skipPasswordFields"];
+    [defaults setBool:YES forKey:@"revealPasteboardTypes"];
+
+    FCNoopSaveTarget *saveTarget = [[FCNoopSaveTarget alloc] init];
+    FloatcutOperator *operator = [[FloatcutOperator alloc] init];
+    [operator awakeFromNibDisplaying:6 withDisplayLength:80
+                    withSaveSelector:@selector(addPreferencesToDictionary:)
+                            forTarget:saveTarget];
+    [operator setFavoritesStoreSelected:YES];
+    [operator addClipping:@"existing favorite" ofType:@"text" fromApp:@"Tests"
+         withAppBundleURL:nil target:nil clippingAddedSelector:NULL];
+    NSString *favoriteID = [[[operator getClippingFromIndex:0] identifier] copy];
+
+    FCAssert(![operator shouldSkip:@"ordinary text" ofType:@"text" fromAvailableTypes:@[]],
+             @"Ordinary clipboard text was unexpectedly filtered");
+    FCAssert([operator addCapturedTextClipping:@"ordinary text" ofType:@"text" fromApp:@"Source App"
+                                  withAppBundleURL:@"/Applications/Source.app"
+                                            target:nil clippingAddedSelector:NULL],
+             @"Captured text was not accepted while favorites were selected");
+    NSString *firstTextID = [[[[operator primaryStore] clippingAtPosition:0] identifier] copy];
+    FCAssert([operator addCapturedTextClipping:@"ordinary text" ofType:@"text" fromApp:@"Source App"
+                                  withAppBundleURL:nil target:nil clippingAddedSelector:NULL],
+             @"A repeated local text copy should be accepted");
+    FCAssert(![[[[operator primaryStore] clippingAtPosition:0] identifier] isEqualToString:firstTextID],
+             @"Replacing local text must create a new clip identity");
+    [firstTextID release];
+
+    NSData *imageData = [@"captured-image-data" dataUsingEncoding:NSUTF8StringEncoding];
+    FCAssert([operator addCapturedImageClippingData:imageData ofType:@"public.png" fromApp:@"Source App"
+                                       withAppBundleURL:@"/Applications/Source.app"
+                                                 target:nil clippingAddedSelector:NULL],
+             @"Captured image was not accepted while favorites were selected");
+    NSString *firstImageID = [[[[operator primaryStore] clippingAtPosition:0] identifier] copy];
+    FCAssert([operator addCapturedImageClippingData:imageData ofType:@"public.png" fromApp:@"Source App"
+                                       withAppBundleURL:nil target:nil clippingAddedSelector:NULL],
+             @"A repeated local image copy should be accepted");
+    FCAssert(![[[[operator primaryStore] clippingAtPosition:0] identifier] isEqualToString:firstImageID],
+             @"Replacing a local image must create a new clip identity");
+    [firstImageID release];
+    FCAssert(operator.favoritesStoreIsSelected && operator.jcListCount == 1 &&
+             [[[operator getClippingFromIndex:0] identifier] isEqualToString:favoriteID],
+             @"Capturing clipboard content or a diagnostic type changed the favorites");
+
+    [operator setFavoritesStoreSelected:NO];
+    FCAssert(operator.jcListCount == 3,
+             @"Captured text, image and diagnostic type should all enter the primary history");
+    FloatcutClipping *image = [operator getClippingFromIndex:0];
+    FCAssert([image isImage] && [[image imageData] isEqualToData:imageData] && ![image receivedFromSync],
+             @"Captured image data or local origin changed");
+    FCAssert([[[operator getClippingFromIndex:1] contents] isEqualToString:@"ordinary text"] &&
+             [[operator getClippingFromIndex:1] appBundleURL] == nil,
+             @"The newest text copy must replace the old source metadata");
+    FCAssert([[[operator getClippingFromIndex:2] contents] isEqualToString:@"text"],
+             @"Pasteboard-type diagnostic did not enter the primary history");
+
+    for (NSString *key in keys) {
+        id value = previousValues[key];
+        if (value)
+            [defaults setObject:value forKey:key];
+        else
+            [defaults removeObjectForKey:key];
+    }
+    [favoriteID release];
     [operator release];
     [saveTarget release];
 }
@@ -645,6 +775,7 @@ int main(void)
         testTextMergeSkipsImages();
         testFavoriteStoreSwitchingAndTargetedClearing();
         testRemoteImportsAlwaysUsePrimaryStore();
+        testCapturedClipsAlwaysUsePrimaryStore();
         testPerItemFavoriteActions();
         testPersistenceRoundTrip();
         runSearchBenchmark();
