@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/control.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "CLIPBOARD_ACK"
+        },
+        "clip_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "applied",
+            "duplicate",
+            "skipped",
+            "unsupported",
+            "invalid"
+          ]
+        }
+      },
+      "required": [
+        "clip_id",
+        "status"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PING"
+        },
+        "sent_at_ms": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      },
+      "required": [
+        "sent_at_ms"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PONG"
+        },
+        "reply_to": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "required": [
+        "reply_to"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "UNPAIR"
+        },
+        "revocation_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "revoked_at_ms": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "reason": {
+          "const": "user_request"
+        }
+      },
+      "required": [
+        "revocation_id",
+        "revoked_at_ms"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "UNPAIR_ACK"
+        },
+        "revocation_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "required": [
+        "revocation_id"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "ERROR"
+        },
+        "code": {
+          "$ref": "common.schema.json#/$defs/errorCode"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "reply_to": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ]
+    }
+  ]
+}

@@ -318,6 +318,7 @@
     pbBlockCount = 0;
     pbBlockedChangeCounts = [[NSMutableOrderedSet alloc] init];
     [FloatcutSyncCoordinator shared].clipboardDelegate = self;
+    [[FloatcutTransferPresentationCoordinator shared] startObserving];
     [[FloatcutSyncCoordinator shared] startIfEnabled];
     [pollPBTimer fire];
     
@@ -2377,6 +2378,13 @@
 {
     (void)controller;
     [self showPreferencePanel:nil];
+}
+
+- (void)statusPopoverControllerDidRequestSyncPreferences:(FloatcutStatusPopoverController *)controller
+{
+    (void)controller;
+    [self showPreferencePanel:nil];
+    [self.swiftPreferencesWindowController showSynchronizationAndFocus];
 }
 
 - (void)statusPopoverControllerDidRequestAbout:(FloatcutStatusPopoverController *)controller

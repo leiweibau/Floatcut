@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/hello.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "HELLO"
+    },
+    "device_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "device_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "platform": {
+      "$ref": "common.schema.json#/$defs/platform"
+    },
+    "capabilities": {
+      "description": "Bytewise ascending order is a semantic constraint.",
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9._-]{0,47}$(?![\\s\\S])"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "const": "clip.image.jpeg"
+          }
+        },
+        {
+          "contains": {
+            "const": "clip.image.png"
+          }
+        },
+        {
+          "contains": {
+            "const": "clip.text.utf8"
+          }
+        }
+      ]
+    },
+    "certificate_sha256": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "session_nonce": {
+      "$ref": "common.schema.json#/$defs/nonce32"
+    }
+  },
+  "required": [
+    "type",
+    "device_id",
+    "device_name",
+    "platform",
+    "capabilities",
+    "certificate_sha256",
+    "session_nonce"
+  ]
+}

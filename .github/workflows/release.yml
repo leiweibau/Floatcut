@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -19,105 +22,74 @@ jobs:
       with:
         xcode-version: latest-stable
 
-    - name: Extract version from tag
-      id: get_version
+    - name: Check release version
+      shell: bash
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/}
-          VERSION=${VERSION#v}
-        else
-          VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
-
-    - name: Build and Archive
-      run: |
-        xcodebuild \
-          -project Floatcut.xcodeproj \
-          -scheme Floatcut \
-          -configuration Release \
-          -archivePath build/Floatcut.xcarchive \
-          archive \
-          CODE_SIGNING_ALLOWED=NO
-
-    - name: Export App
-      run: |
-        mkdir -p build/Export
-        cp -R build/Floatcut.xcarchive/Products/Applications/Floatcut.app build/Export/
-        codesign --force --deep --sign - build/Export/Floatcut.app
-
-    - name: Verify Code Signing
-      run: |
-        echo "=== Code signature ==="
-        codesign -dv --verbose=2 build/Export/Floatcut.app
-        echo ""
-        codesign --verify --verbose build/Export/Floatcut.app
-
-    - name: Create DMG
-      run: |
-        mkdir -p build/dmg-staging
-        cp -R build/Export/Floatcut.app build/dmg-staging/
-        ln -s /Applications build/dmg-staging/Applications
-
-        DMG_PATH="$(pwd)/build/Floatcut.dmg"
-
-        hdiutil create \
-          -volname "Floatcut" \
-          -srcfolder build/dmg-staging \
-          -ov \
-          -format UDZO \
-          "$DMG_PATH"
-
-        ls -lh "$DMG_PATH"
-
-    - name: Generate Release Notes
-      run: |
-        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-        if [ -z "$PREV_TAG" ]; then
-          COMMITS=$(git log --pretty=format:"- %s (%h)" --reverse)
-        else
-          COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --reverse)
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          echo "FLOATCUT_EXPECTED_VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
         fi
 
-        cat > release_notes.md <<EOF
-        ## Changes in this release
+    - name: Configure Developer ID and notarization
+      shell: bash
+      env:
+        CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+        CERTIFICATE_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        NOTARY_API_KEY_BASE64: ${{ secrets.NOTARY_API_KEY_BASE64 }}
+        NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+        NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+      run: |
+        set -euo pipefail
+        for variable in CERTIFICATE_P12_BASE64 CERTIFICATE_P12_PASSWORD NOTARY_API_KEY_BASE64 NOTARY_API_KEY_ID NOTARY_API_ISSUER_ID; do
+          if [[ -z "${!variable}" ]]; then
+            echo "Missing release secret: $variable" >&2
+            exit 1
+          fi
+        done
 
-        $COMMITS
+        KEYCHAIN_PATH="$RUNNER_TEMP/floatcut-signing.keychain-db"
+        CERTIFICATE_PATH="$RUNNER_TEMP/floatcut-developer-id.p12"
+        API_KEY_PATH="$RUNNER_TEMP/floatcut-notary-api-key.p8"
+        KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
 
-        ## Installation
+        printf '%s' "$CERTIFICATE_P12_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+        printf '%s' "$NOTARY_API_KEY_BASE64" | base64 -D > "$API_KEY_PATH"
+        chmod 600 "$CERTIFICATE_PATH" "$API_KEY_PATH"
 
-        1. Download the DMG file below
-        2. Open the DMG and drag Floatcut.app to Applications
-        3. Launch Floatcut
-        4. Grant Accessibility permission when prompted (System Settings > Privacy & Security > Accessibility)
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security list-keychains -d user -s "$KEYCHAIN_PATH"
+        security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_P12_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-        **Gatekeeper:** Floatcut is ad-hoc signed and not notarized. If macOS blocks
-        the first launch, choose System Settings > Privacy & Security > Open Anyway.
-        For a trusted app bundle, you can alternatively run:
-        \`\`\`bash
-        xattr -dr com.apple.quarantine "/Applications/Floatcut.app"
-        \`\`\`
+        xcrun notarytool store-credentials floatcut-release \
+          --key "$API_KEY_PATH" \
+          --key-id "$NOTARY_API_KEY_ID" \
+          --issuer "$NOTARY_API_ISSUER_ID" \
+          --keychain "$KEYCHAIN_PATH"
+        echo "FLOATCUT_NOTARY_PROFILE=floatcut-release" >> "$GITHUB_ENV"
+        echo "FLOATCUT_NOTARY_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-        **Upgrading?** If paste stops working after updating, reset the accessibility permission:
-        \`\`\`
-        tccutil reset Accessibility de.meierkarsten.floatcut
-        \`\`\`
-        Then re-grant permission to Floatcut and restart the app.
-
-        ## Build Info
-
-        - Signing: ad-hoc signed (not notarized)
-        - Requires: macOS 13.5+
-        EOF
+    - name: Build, sign and notarize app and DMG
+      shell: bash
+      run: bash Scripts/package-notarized-app.sh
 
     - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: build/Floatcut.dmg
-        body_path: release_notes.md
+        files: dist/Floatcut_universal_${{ env.FLOATCUT_EXPECTED_VERSION }}.dmg
+        generate_release_notes: true
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Remove temporary signing credentials
+      if: always()
+      shell: bash
+      run: |
+        if [[ -f "$RUNNER_TEMP/floatcut-signing.keychain-db" ]]; then
+          security delete-keychain "$RUNNER_TEMP/floatcut-signing.keychain-db"
+        fi
+        rm -f "$RUNNER_TEMP/floatcut-developer-id.p12" "$RUNNER_TEMP/floatcut-notary-api-key.p8"

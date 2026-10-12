@@ -2,7 +2,7 @@
 
 [English](user-guide.md) | Deutsch · [Projektübersicht](readme.de.md)
 
-Diese Anleitung beschreibt Floatcut 4.0 für macOS. Die Screenshots verwenden für eine einheitliche Darstellung die englische Benutzeroberfläche; die deutschen Bezeichnungen werden im Text genannt.
+Diese Anleitung beschreibt Floatcut 4.5.0 für macOS. Die Screenshots verwenden für eine einheitliche Darstellung die englische Benutzeroberfläche; die deutschen Bezeichnungen werden im Text genannt.
 
 ## Inhalt
 
@@ -21,7 +21,7 @@ Diese Anleitung beschreibt Floatcut 4.0 für macOS. Die Screenshots verwenden f�
 
 Floatcut läuft in der Menüleiste und öffnet kein herkömmliches Hauptfenster. `Floatcut.app` nach `/Applications` kopieren, starten und rechts in der Menüleiste nach dem Floatcut-Icon suchen.
 
-Die App ist lokal beziehungsweise ad hoc signiert und nicht notarisiert. Falls macOS sie blockiert, Floatcut einmal starten und anschließend unter **Systemeinstellungen → Datenschutz & Sicherheit → Trotzdem öffnen** freigeben. Die Quarantäne sollte nur für ein vertrauenswürdiges Bundle umgangen und Gatekeeper niemals global deaktiviert werden.
+Offizielle Developer-ID-signierte und notarisierte Releases sollten Gatekeeper regulär passieren. Ein lokaler Entwicklungs-Build kann blockiert werden; nur bei einem vertrauenswürdigen Bundle unter **Systemeinstellungen → Datenschutz & Sicherheit → Trotzdem öffnen** freigeben. Gatekeeper niemals global deaktivieren.
 
 Floatcut fragt nach der Bedienungshilfen-Berechtigung, um in der aktiven Anwendung den Einfügebefehl auslösen zu können. Die Erfassung funktioniert auch ohne diese Berechtigung, das automatische Einfügen möglicherweise nicht. Für die Synchronisation ist zusätzlich der Zugriff auf das lokale Netzwerk erforderlich.
 
@@ -39,6 +39,7 @@ Die Bedienelemente haben folgende Aufgaben:
 
 - **Suchfeld:** filtert den gerade aktiven Speicher während der Eingabe.
 - **Stern neben der Suche:** öffnet die Favoriten. Dort wird er zum Zwischenablage-Button, der zum normalen Verlauf zurückführt. Beim Umschalten wird nichts gelöscht.
+- **Client-Button neben Suche und Favoriten:** öffnet die Client-Auswahl zum Senden einer Datei und zeigt laufende Transfers.
 - **Stern an einem Verlaufseintrag:** übernimmt den Clip zusätzlich in die Favoriten und wird hervorgehoben. Ein weiterer Klick entfernt nur die Favoritenkopie.
 - **Löschsymbol an einem Favoriten:** entfernt den Clip aus den Favoriten, behält ihn aber im normalen Verlauf.
 - **Alles löschen:** leert den normalen Verlauf und erhält die Favoriten.
@@ -122,6 +123,8 @@ Diese Seite nennt die Mitwirkenden von Jumpcut, Flycut und Floatcut sowie verwen
 
 Die Synchronisation ist optional und erfolgt direkt im lokalen Netzwerk. Es gibt keinen zentralen Server, keinen iCloud-Speicher, kein Konto, keine Offline-Warteschlange und keine nachträgliche Übertragung des Verlaufs. Nur neue unterstützte Clips werden Geräten angeboten, die im Kopierzeitpunkt gekoppelt und online sind. Ein empfangener Clip wird nicht erneut weitergeleitet; dadurch werden Schleifen vermieden.
 
+Diese Version verwendet ausschließlich Protokoll V3. Beide Geräte müssen V3 unterstützen und neu gekoppelt werden; bestehende V2-Kopplungen werden nicht übernommen. Bis zu 32 Geräte können gespeichert sein, einschließlich offline befindlicher oder deaktivierter Geräte.
+
 ### Aktivieren und koppeln
 
 1. **Einstellungen → Synchronisation** öffnen und die lokale Synchronisation aktivieren.
@@ -141,6 +144,19 @@ macOS kann nach der Berechtigung für das lokale Netzwerk fragen. Firewalls und 
 - **Neue Kopplungsanfragen zulassen** kann alle neuen Anfragen verwerfen, während vorhandene Kopplungen weiter funktionieren.
 
 Textclips werden über Protokoll V2 synchronisiert. PNG- und JPEG-Bilder können ebenfalls gesendet werden, wenn die ausgehende Option für das Zielgerät aktiv ist. Der Bildempfang ist von diesem Sendeschalter unabhängig. Favoritenstatus, vollständiger Verlauf und Löschaktionen werden nicht synchronisiert.
+
+### Dateien an einen Client senden
+
+1. Den Client-Button neben Suchfeld und Favoriten anklicken und ein verfügbares gekoppeltes Gerät auswählen.
+2. Im Öffnen-Dialog eine einzelne reguläre Datei wählen und **Senden** bestätigen. Das Statusfenster zeigt zunächst die Vorbereitung, danach **Warten auf Genehmigung**.
+3. Auf dem Empfänger erscheint dasselbe Statusfenster. Dort **Annehmen und speichern …** wählen und einen Zielordner bestätigen. **Ablehnen** verhindert die Übertragung.
+4. Beide Fenster zeigen die vom Empfänger geprüften und geschriebenen Bytes als Prozentwert. Auch bei 100 % ist der Vorgang erst nach **Gespeichert** erfolgreich bestätigt.
+
+Der Empfänger speichert unter dem angezeigten Namen `<Transfer-ID>-<Dateiname>`. Vorhandene Dateien werden nicht ersetzt. Unterstützt sind einzelne Dateien von 0 bis 8 GiB und zunächst lokale APFS-Zielordner. Verzeichnisse, Packages und symbolische Links sind ausgeschlossen.
+
+**Abbrechen** beendet einen noch nicht speichernden Transfer. Während **Wird gespeichert und geprüft** ist die Aktion deaktiviert. Das Schließen eines Fensters blendet es nur aus; über **Transfers** im Client-Menü lässt es sich wieder öffnen. Ohne Empfängerentscheidung läuft ein Angebot nach 60 Sekunden ab.
+
+Ist das Endergebnis **Unbestätigt**, lässt sich mit **Status aktualisieren** die gespeicherte Empfangsbestätigung abfragen. Daten werden dabei nicht erneut gesendet. Erhaltene Dateien werden nicht automatisch geöffnet, weitergeleitet oder in die Zwischenablage übernommen.
 
 ### Identität zurücksetzen
 

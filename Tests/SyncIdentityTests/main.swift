@@ -1,6 +1,58 @@
 import Foundation
 import Security
 
+private struct TestDERNode {
+    var tag: UInt8
+    var body: Data
+    var encoded: Data {
+        var size = body.count
+        var length = [UInt8]()
+        repeat { length.insert(UInt8(size & 255), at: 0); size >>= 8 } while size > 0
+        let prefix: Data = body.count < 128 ? Data([UInt8(body.count)]) : Data([0x80 | UInt8(length.count)] + length)
+        return Data([tag]) + prefix + body
+    }
+}
+
+private func testDERNodes(_ data: Data) -> [TestDERNode] {
+    let bytes = Array(data)
+    var index = 0
+    var result: [TestDERNode] = []
+    while index < bytes.count {
+        let tag = bytes[index]; index += 1
+        var count = Int(bytes[index]); index += 1
+        if count & 0x80 != 0 {
+            let octets = count & 0x7f; count = 0
+            for _ in 0..<octets { count = count << 8 | Int(bytes[index]); index += 1 }
+        }
+        result.append(TestDERNode(tag: tag, body: Data(bytes[index..<index + count])))
+        index += count
+    }
+    return result
+}
+
+private func alterExtensions(_ tbs: inout [TestDERNode], _ mutate: (inout [TestDERNode]) -> Void) {
+    let sequence = testDERNodes(tbs[7].body)[0]
+    var extensions = testDERNodes(sequence.body)
+    mutate(&extensions)
+    tbs[7].body = TestDERNode(tag: 0x30, body: extensions.reduce(Data()) { $0 + $1.encoded }).encoded
+}
+
+/// Re-sign malformed profiles with the valid identity key: rejection must be
+/// caused by profile validation rather than merely a broken self-signature.
+private func alteredCertificate(_ identity: FloatcutSyncIdentity, _ mutate: (inout [TestDERNode]) -> Void) throws -> SecCertificate {
+    var root = testDERNodes(testDERNodes(identity.certificateDER)[0].body)
+    var tbs = testDERNodes(root[0].body)
+    mutate(&tbs)
+    root[0].body = tbs.reduce(Data()) { $0 + $1.encoded }
+    guard let signature = SecKeyCreateSignature(identity.privateKey, .ecdsaSignatureMessageX962SHA256,
+                                                root[0].encoded as CFData, nil) as Data?
+    else { fatalError("Could not sign malformed test certificate") }
+    root[2].body = Data([0]) + signature
+    let der = TestDERNode(tag: 0x30, body: root.reduce(Data()) { $0 + $1.encoded }).encoded
+    guard let certificate = SecCertificateCreateWithData(nil, der as CFData) else { fatalError("Invalid DER test construction") }
+    return certificate
+}
+
 private func persistenceStore(suiteName: String) -> (UserDefaults, FloatcutSyncIdentityStore) {
     guard let defaults = UserDefaults(suiteName: suiteName) else {
         fatalError("Could not create persistence-test defaults suite")
@@ -55,13 +107,15 @@ let legacyPeerJSON = Data("""
 [{"deviceID":"00112233-4455-4677-8899-aabbccddeeff","name":"Legacy fixture","platform":"macos","certificateSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","certificateDERBase64":"AA==","pairedAtMS":1,"lastSeenMS":1,"capabilities":["clip.image.jpeg","clip.image.png","clip.text.utf8"],"enabled":true,"identityMismatch":false}]
 """.utf8)
 let peerWithoutImageSetting = try JSONDecoder().decode([FloatcutSyncPeer].self, from: legacyPeerJSON)[0]
-guard peerWithoutImageSetting.allowsOutgoingImages == false else {
+guard peerWithoutImageSetting.allowsOutgoingImages == false, peerWithoutImageSetting.trustGeneration == 0 else {
     fatalError("A peer without allowsOutgoingImages did not fail closed")
 }
 var peerWithImageSetting = peerWithoutImageSetting
 peerWithImageSetting.allowsOutgoingImages = true
+peerWithImageSetting.trustGeneration = 42
 let peerRoundTrip = try JSONDecoder().decode([FloatcutSyncPeer].self, from: JSONEncoder().encode([peerWithImageSetting]))[0]
 guard peerRoundTrip.allowsOutgoingImages, peerRoundTrip.enabled,
+      peerRoundTrip.trustGeneration == 42,
       peerRoundTrip.certificateSHA256 == peerWithoutImageSetting.certificateSHA256 else {
     fatalError("The per-peer image setting did not persist independently")
 }
@@ -87,6 +141,89 @@ do {
           first.certificateDER == second.certificateDER,
           FloatcutSyncCertificateValidator.validate(certificate: first.certificate, expectedDeviceID: first.deviceID)
     else { fatalError("Identity was not stable or certificate validation failed") }
+
+    let malformedProfiles: [(String, (inout [TestDERNode]) -> Void)] = [
+        ("noncritical BasicConstraints", { tbs in alterExtensions(&tbs) { extensions in
+            var parts = testDERNodes(extensions[0].body); parts.remove(at: 1)
+            extensions[0].body = parts.reduce(Data()) { $0 + $1.encoded }
+        }}),
+        ("noncritical KeyUsage", { tbs in alterExtensions(&tbs) { extensions in
+            var parts = testDERNodes(extensions[1].body); parts.remove(at: 1)
+            extensions[1].body = parts.reduce(Data()) { $0 + $1.encoded }
+        }}),
+        ("CA=true", { tbs in alterExtensions(&tbs) { extensions in
+            var parts = testDERNodes(extensions[0].body)
+            parts[2].body = Data([0x30, 3, 1, 1, 0xff])
+            extensions[0].body = parts.reduce(Data()) { $0 + $1.encoded }
+        }}),
+        ("extra SAN URI", { tbs in alterExtensions(&tbs) { extensions in
+            var parts = testDERNodes(extensions[3].body)
+            let san = testDERNodes(parts[1].body)[0]
+            parts[1].body = TestDERNode(tag: 0x30, body: san.body + san.body).encoded
+            extensions[3].body = parts.reduce(Data()) { $0 + $1.encoded }
+        }}),
+        ("duplicate EKU", { tbs in alterExtensions(&tbs) { extensions in
+            var parts = testDERNodes(extensions[2].body)
+            let eku = testDERNodes(parts[1].body)[0]
+            parts[1].body = TestDERNode(tag: 0x30, body: eku.body + testDERNodes(eku.body)[0].encoded).encoded
+            extensions[2].body = parts.reduce(Data()) { $0 + $1.encoded }
+        }}),
+        ("duplicate extension", { tbs in alterExtensions(&tbs) { extensions in extensions.append(extensions[0]) }}),
+        ("unknown critical extension", { tbs in alterExtensions(&tbs) { extensions in
+            extensions.append(TestDERNode(tag: 0x30, body: Data([6, 2, 42, 3, 1, 1, 0xff, 4, 2, 5, 0])))
+        }}),
+        ("zero serial", { $0[1].body = Data([0]) }),
+        ("160-bit serial", { $0[1].body = Data([0]) + Data(repeating: 0xff, count: 20) }),
+    ]
+    for (name, mutate) in malformedProfiles {
+        let certificate = try alteredCertificate(first, mutate)
+        guard !FloatcutSyncCertificateValidator.validate(certificate: certificate, expectedDeviceID: first.deviceID)
+        else { fatalError("Malformed certificate accepted: \(name)") }
+    }
+    let unknownNoncritical = try alteredCertificate(first) { tbs in alterExtensions(&tbs) { extensions in
+        extensions.append(TestDERNode(tag: 0x30, body: Data([6, 2, 42, 3, 4, 2, 5, 0])))
+    }}
+    guard FloatcutSyncCertificateValidator.validate(certificate: unknownNoncritical, expectedDeviceID: first.deviceID)
+    else { fatalError("Unknown noncritical extension was not ignored") }
+
+    let originalBinding = String(repeating: "a", count: 64)
+    let originalTranscript = String(repeating: "b", count: 64)
+    var pending = FloatcutSyncPendingPairing(requestID: FloatcutSyncProtocol.uuidV4(), peerDeviceID: first.deviceID,
+        peerCertificateSHA256: first.certificateSHA256, peerCertificateDERBase64: first.certificateDER.base64EncodedString(),
+        transcriptSHA256: originalTranscript, expiresAtMS: 0, localIsInitiator: true,
+        localConfirmed: false, remoteConfirmed: true, complete: false,
+        bootDeadline: FloatcutSyncBootDeadline.starting(durationMS: 120_000), originalControlBindingSHA256: originalBinding,
+        initiatorDeviceID: FloatcutSyncProtocol.uuidV4(), initiatorCertificateSHA256: String(repeating: "c", count: 64),
+        acceptorDeviceID: first.deviceID, acceptorCertificateSHA256: first.certificateSHA256,
+        initiatorCommitmentSHA256: String(repeating: "d", count: 64), acceptorCommitmentSHA256: String(repeating: "e", count: 64),
+        trustGeneration: 42)
+    guard pending.isValidSameBoot() else { fatalError("Valid same-boot pending record rejected") }
+    let restoredPending = try JSONDecoder().decode(FloatcutSyncPendingPairing.self, from: JSONEncoder().encode(pending))
+    let resumed = try FloatcutSyncPairingV3(pending: restoredPending)
+    guard resumed.originalControlBindingSHA256 == originalBinding, resumed.transcript?.sha256 == originalTranscript,
+          resumed.phase == .revealed, !resumed.localConfirmed, resumed.remoteConfirmed,
+          resumed.deadline == pending.bootDeadline else { fatalError("Resume replaced original context or local confirmation") }
+    _ = try resumed.confirmLocal()
+    try resumed.markCompleted()
+    pending.complete = true
+    pending.localConfirmed = true
+    pending.bootDeadline = resumed.deadline
+    let completedPending = try JSONDecoder().decode(FloatcutSyncPendingPairing.self, from: JSONEncoder().encode(pending))
+    guard completedPending.isValidSameBoot() else { fatalError("Valid completed retention rejected") }
+    let completed = try FloatcutSyncPairingV3(pending: completedPending)
+    try completed.markCompleted()
+    guard completed.phase == .complete, completed.deadline == resumed.deadline else { fatalError("Completed replay renewed retention") }
+    pending.localConfirmed = false
+    guard !pending.isValidSameBoot() else { fatalError("Completed record without both confirmations was trusted") }
+    pending = restoredPending
+    pending.bootDeadline = nil
+    guard !pending.isValidSameBoot() else { fatalError("Missing boot deadline restored pairing") }
+    pending = restoredPending
+    pending.trustGeneration = 0
+    guard !pending.isValidSameBoot() else { fatalError("Missing trust generation restored pairing") }
+    pending = restoredPending
+    pending.localIsInitiator = false
+    guard !pending.isValidSameBoot() else { fatalError("Role-inconsistent peer context restored pairing") }
 
     let reloadedStore = FloatcutSyncIdentityStore(
         defaults: defaults,

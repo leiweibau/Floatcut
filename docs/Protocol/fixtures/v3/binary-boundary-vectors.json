@@ -1,0 +1,27 @@
+[
+  {
+    "name": "empty-data.bin",
+    "byte_size": 0,
+    "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "records": [],
+    "stream_size": 45,
+    "stream_sha256": "bbdbff48c1ba777e2c822bae2b604a5c10dba9087f5c1b778826c8fae8e457d6"
+  },
+  {
+    "name": "two-chunk-data.bin",
+    "byte_size": 262145,
+    "content_sha256": "75cf564b051508a2f4af5240b2c9a5e5c8af66d02aeb28b9a664b0411fbb4115",
+    "records": [
+      {
+        "offset": 0,
+        "data_size": 262144
+      },
+      {
+        "offset": 262144,
+        "data_size": 1
+      }
+    ],
+    "stream_size": 262216,
+    "stream_sha256": "fa555d63b2b89056459e35cbca6249378810b29b4689b0e68cba538a601ddb76"
+  }
+]

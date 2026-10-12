@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/message.schema.json",
+  "description": "Control-channel JSON messages only. FILE_OPEN and FILE_READY are validated by data-channel.schema.json. Binary DATA/END records are defined by the normative v3 wire contract.",
+  "oneOf": [
+    {
+      "$ref": "hello.schema.json"
+    },
+    {
+      "$ref": "pairing.schema.json"
+    },
+    {
+      "$ref": "control.schema.json"
+    },
+    {
+      "$ref": "clipboard-text.schema.json"
+    },
+    {
+      "$ref": "clipboard-image.schema.json"
+    },
+    {
+      "$ref": "file-transfer.schema.json"
+    }
+  ]
+}

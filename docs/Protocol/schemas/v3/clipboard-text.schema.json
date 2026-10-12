@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/clipboard-text.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "CLIPBOARD_UPDATE"
+    },
+    "clip_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "source_device_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "created_at_ms": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "content_type": {
+      "const": "text/plain;charset=utf-8"
+    },
+    "utf8_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 524288
+    },
+    "content_sha256": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "hop_count": {
+      "const": 0
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 524288
+    }
+  },
+  "required": [
+    "type",
+    "clip_id",
+    "source_device_id",
+    "created_at_ms",
+    "content_type",
+    "utf8_size",
+    "content_sha256",
+    "hop_count",
+    "content"
+  ]
+}

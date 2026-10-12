@@ -1,0 +1,98 @@
+{
+  "description": "One directed three-byte file offer; control messages, data-channel JSON, and raw DATA/END bytes are separately identified.",
+  "sender_device_id": "00112233-4455-4677-8899-aabbccddeeff",
+  "receiver_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+  "control_binding_sha256": "bd1de67d2f5d22197092183081ed052262f959748c2332e5385582280d474beb",
+  "manifest_input_hex": "464c4f41544355542d46494c452d4f464645522d5631002233445566774899aabbccddeeff0011bd1de67d2f5d22197092183081ed052262f959748c2332e5385582280d474beb00112233445546778899aabbccddeeffffeeddccbbaa4988b7665544332211000000000000000003ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad000a7265706f72742e747874",
+  "manifest_input_length": 155,
+  "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+  "content_file": "file-content.bin",
+  "content_hex": "616263",
+  "data_stream_file": "file-data.bin",
+  "data_stream_hex": "010000000b000000000000000061626302000000280000000000000003ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "data_stream_length": 61,
+  "data_stream_sha256": "a4257076efc4c944ca4ac59f986a5b6e9c9fa36f9997e6a9ec5ea0980173e2ab",
+  "messages": [
+    {
+      "v": 3,
+      "type": "FILE_OFFER",
+      "message_id": "10000000-0000-4000-8000-00000000000d",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "target_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+      "file_name": "report.txt",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+    },
+    {
+      "v": 3,
+      "type": "FILE_ACCEPT",
+      "message_id": "10000000-0000-4000-8000-00000000000e",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "accept_token": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "expires_in_ms": 15000
+    },
+    {
+      "v": 3,
+      "type": "FILE_STATUS_REQUEST",
+      "message_id": "10000000-0000-4000-8000-00000000000f",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000010",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "pending",
+      "phase": "receiving"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000011",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "saved",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    }
+  ],
+  "data_messages": [
+    {
+      "v": 3,
+      "type": "FILE_OPEN",
+      "message_id": "10000000-0000-4000-8000-000000000012",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "control_binding_sha256": "bd1de67d2f5d22197092183081ed052262f959748c2332e5385582280d474beb",
+      "accept_token": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8"
+    },
+    {
+      "v": 3,
+      "type": "FILE_READY",
+      "message_id": "10000000-0000-4000-8000-000000000013",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "chunk_size": 262144
+    }
+  ],
+  "data_records": [
+    {
+      "opcode": 1,
+      "payload_length": 11,
+      "offset": 0,
+      "data_hex": "616263",
+      "stream_offset": 0
+    },
+    {
+      "opcode": 2,
+      "payload_length": 40,
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "stream_offset": 16
+    }
+  ]
+}

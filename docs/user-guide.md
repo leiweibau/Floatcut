@@ -2,7 +2,7 @@
 
 English | [Deutsch](bedienung.md) · [Project overview](../readme.md)
 
-This guide describes Floatcut 4.0 for macOS. All screenshots use the English interface.
+This guide describes Floatcut 4.5.0 for macOS. All screenshots use the English interface.
 
 ## Contents
 
@@ -21,7 +21,7 @@ This guide describes Floatcut 4.0 for macOS. All screenshots use the English int
 
 Floatcut runs in the menu bar and does not open a conventional main window. Copy `Floatcut.app` to `/Applications`, start it, and look for the Floatcut icon at the right of the menu bar.
 
-The app is locally or ad-hoc signed and is not notarized. If macOS blocks it, start it once and then choose **System Settings → Privacy & Security → Open Anyway**. Only bypass quarantine for a bundle you trust; never disable Gatekeeper globally.
+Official Developer ID-signed and notarized releases should pass Gatekeeper normally. A local development build may be blocked; only for a bundle you trust, choose **System Settings → Privacy & Security → Open Anyway**. Never disable Gatekeeper globally.
 
 Floatcut requests Accessibility permission so it can issue the paste command in the foreground application. Clipboard capture still works without that permission, but automatic paste may not. Synchronization additionally requires Local Network access.
 
@@ -39,6 +39,7 @@ The controls have these functions:
 
 - **Search field:** filters the current store while you type.
 - **Star button beside Search:** opens Favorites. It becomes a clipboard button that returns to normal history. Switching stores never deletes anything.
+- **Client button beside Search and Favorites:** selects a client for sending one file and provides access to active transfers.
 - **Star on a normal history row:** adds that clip to Favorites and highlights the star. Clicking it again removes only the favorite copy.
 - **Delete button on a favorite row:** removes the clip from Favorites while retaining it in normal history.
 - **Clear All:** clears normal history but preserves Favorites.
@@ -122,6 +123,8 @@ This page lists the Jumpcut, Flycut, and Floatcut contributors and third-party c
 
 Synchronization is optional and works directly over the local network. There is no central server, iCloud storage, account, offline queue, or history backfill. Only new supported clips are offered to paired devices that are online at copy time. A received clip is not forwarded again, which prevents loops.
 
+This version uses protocol V3 exclusively. Both devices must support V3 and pair again; V2 trust is not imported. Up to 32 devices can be stored, including offline or disabled devices.
+
 ### Enable and pair
 
 1. Open **Settings → Synchronization** and enable local synchronization.
@@ -141,6 +144,19 @@ macOS may ask for Local Network permission. Firewalls and filters such as Little
 - **Allow new pairing requests** can reject all new requests while current pairings continue to work.
 
 Text clips are synchronized through protocol V2. PNG and JPEG images can also be sent when the per-peer outgoing option is enabled. Image reception does not depend on that outgoing switch. Favorites state, full history, and deletion actions are not synchronized.
+
+### Send a file to a client
+
+1. Click the client button beside Search and Favorites, then choose an available paired device.
+2. Select one regular file in the Open dialog and confirm **Send**. The status window shows preparation, then **Waiting for approval**.
+3. The same status window appears on the receiver. Choose **Accept and Save…** and confirm a destination directory. **Reject** prevents file data from being sent.
+4. Both windows show the receiver's verified, successfully written bytes as a percentage. Even at 100%, success requires the final **Saved** confirmation.
+
+The receiver saves the displayed `<transfer-ID>-<file-name>` name. Existing files are never replaced. One regular file from 0 through 8 GiB is supported, initially to local APFS destinations. Directories, packages and symbolic links are excluded.
+
+**Cancel** ends a transfer before the saving phase. It is disabled during **Saving and verifying**. Closing a window only hides it; reopen it through **Transfers** in the client menu. An unanswered offer expires after 60 seconds.
+
+If the outcome is **Unconfirmed**, use **Refresh status** to query the retained receiver result. This never resends file bytes. Received files are not automatically opened, forwarded or imported into the clipboard.
 
 ### Identity reset
 

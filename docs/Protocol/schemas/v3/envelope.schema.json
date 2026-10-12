@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/envelope.schema.json",
+  "type": "object",
+  "required": [
+    "v",
+    "type",
+    "message_id"
+  ],
+  "properties": {
+    "v": {
+      "const": 3
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$(?![\\s\\S])"
+    },
+    "message_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  }
+}

@@ -20,6 +20,58 @@ final class FloatcutSyncContinuousClock: FloatcutSyncElapsedClock {
     }
 }
 
+/// Pairing persistence uses the kernel boot session and sleep-inclusive elapsed
+/// ticks; neither wall-clock adjustments nor process restarts renew a request.
+enum FloatcutSyncBootClock {
+    static let clockID = "mach_continuous_time_ms_v1"
+
+    static func generation() -> String? {
+        var length = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &length, nil, 0) == 0, length > 1, length <= 128 else { return nil }
+        var bytes = [CChar](repeating: 0, count: length)
+        guard sysctlbyname("kern.bootsessionuuid", &bytes, &length, nil, 0) == 0,
+              bytes.contains(0) else { return nil }
+        let value = String(cString: bytes).lowercased()
+        guard UUID(uuidString: value) != nil else { return nil }
+        return value
+    }
+
+    static func nowTickMS() -> UInt64? {
+        var base = mach_timebase_info_data_t()
+        guard mach_timebase_info(&base) == KERN_SUCCESS, base.denom > 0 else { return nil }
+        let divisor = UInt64(base.denom).multipliedReportingOverflow(by: 1_000_000)
+        guard !divisor.overflow else { return nil }
+        let wide = mach_continuous_time().multipliedFullWidth(by: UInt64(base.numer))
+        guard wide.high < divisor.partialValue else { return nil }
+        return divisor.partialValue.dividingFullWidth(wide).quotient
+    }
+}
+
+struct FloatcutSyncBootDeadline: Codable, Equatable {
+    let localBootGeneration: String
+    let clockID: String
+    let startTickMS: UInt64
+    let deadlineTickMS: UInt64
+
+    static func starting(durationMS: UInt64, nowTickMS: UInt64? = FloatcutSyncBootClock.nowTickMS(),
+                         bootGeneration: String? = FloatcutSyncBootClock.generation()) -> FloatcutSyncBootDeadline? {
+        guard let nowTickMS, let bootGeneration, UUID(uuidString: bootGeneration) != nil else { return nil }
+        let end = nowTickMS.addingReportingOverflow(durationMS)
+        guard !end.overflow, durationMS > 0 else { return nil }
+        return FloatcutSyncBootDeadline(localBootGeneration: bootGeneration, clockID: FloatcutSyncBootClock.clockID,
+                                        startTickMS: nowTickMS, deadlineTickMS: end.partialValue)
+    }
+
+    func isValid(durationMS: UInt64, nowTickMS: UInt64? = FloatcutSyncBootClock.nowTickMS(),
+                 bootGeneration: String? = FloatcutSyncBootClock.generation()) -> Bool {
+        guard let nowTickMS, let bootGeneration, clockID == FloatcutSyncBootClock.clockID,
+              localBootGeneration == bootGeneration, UUID(uuidString: bootGeneration) != nil,
+              deadlineTickMS >= startTickMS, deadlineTickMS - startTickMS == durationMS
+        else { return false }
+        return startTickMS <= nowTickMS && nowTickMS < deadlineTickMS
+    }
+}
+
 enum FloatcutSyncAttemptPurpose: String {
     case trusted
     case pairingResume

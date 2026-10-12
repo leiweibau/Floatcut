@@ -7,7 +7,7 @@ English | [Deutsch](docs/readme.de.md)
 
 Floatcut is a lightweight clipboard manager for macOS. It keeps a searchable local history of copied text and images, provides a separate favorites store, and can exchange new clips directly with paired devices on the local network.
 
-**Current version:** 4.0<br>
+**Current version:** 4.5.0<br>
 **User guide:** [English](docs/user-guide.md) · [Deutsch](docs/bedienung.md)
 
 <p align="center">
@@ -35,8 +35,8 @@ Floatcut is a lightweight clipboard manager for macOS. It keeps a searchable loc
 ## Installation
 
 1. Copy `Floatcut.app` to `/Applications`.
-2. Start Floatcut. Because development and release bundles are locally or ad-hoc signed and not notarized, macOS may block the first launch.
-3. If necessary, open **System Settings → Privacy & Security** and choose **Open Anyway**.
+2. Start Floatcut. Official Developer ID-signed and notarized releases should open normally; local development builds may be blocked by macOS.
+3. For a trusted local build only, use **System Settings → Privacy & Security → Open Anyway** if necessary.
 4. Grant Accessibility permission when prompted if you want Floatcut to paste selected clips automatically.
 
 For trusted local builds, Gatekeeper and Accessibility details are documented in [Release setup](docs/RELEASE_SETUP.md). Do not disable Gatekeeper globally.
@@ -60,7 +60,7 @@ Install Xcode, then create a universal Release app bundle in `dist/`:
 bash Scripts/package-app.sh
 ```
 
-The results are `dist/Floatcut.app` and `dist/Floatcut_universal_<version>.dmg` (currently `Floatcut_universal_4.0.dmg`). The script uses the stable local `Floatcut Local Development` signing identity when available and otherwise falls back to ad-hoc signing. More details are available in [Release setup](docs/RELEASE_SETUP.md).
+The results are `dist/Floatcut.app` and `dist/Floatcut_universal_<version>.dmg` (currently `Floatcut_universal_4.5.0.dmg`). This is a local, **non-notarized** build. Official releases use `Scripts/package-notarized-app.sh` with a Developer ID Application identity and Apple notary credentials; see [Release setup](docs/RELEASE_SETUP.md).
 
 ## Privacy and data storage
 

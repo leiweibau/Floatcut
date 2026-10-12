@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/common.schema.json",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "nonce32": {
+      "description": "Canonical unpadded base64url for exactly 32 bytes, including zero pad bits.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$(?![\\s\\S])"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "platform": {
+      "type": "string",
+      "pattern": "^[a-z0-9._-]{1,16}$(?![\\s\\S])"
+    },
+    "errorCode": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{1,48}$(?![\\s\\S])"
+    },
+    "fileName": {
+      "description": "NFC and the 180 UTF-8 byte bound require semantic validation. No native path semantics are transmitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180,
+      "pattern": "^(?!\\.{1,2}$)(?!.*[. ]$)[^\\x00-\\x1f\\x7f/\\\\:<>\"|?*]+$(?![\\s\\S])"
+    }
+  }
+}

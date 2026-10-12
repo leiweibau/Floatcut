@@ -1,0 +1,115 @@
+{
+  "messages": [
+    {
+      "v": 3,
+      "type": "FILE_REJECT",
+      "message_id": "10000000-0000-4000-8000-000000000014",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "reason": "unsupported_destination"
+    },
+    {
+      "v": 3,
+      "type": "FILE_CANCEL",
+      "message_id": "10000000-0000-4000-8000-000000000015",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "reason": "user_cancelled"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000016",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "unknown",
+      "reason": "receipt_missing"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000017",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "cancelled",
+      "reason": "peer_cancelled"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000018",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "failed",
+      "reason": "hash_mismatch"
+    },
+    {
+      "v": 3,
+      "type": "PAIR_REJECT",
+      "message_id": "10000000-0000-4000-8000-000000000019",
+      "request_id": "11223344-5566-4788-99aa-bbccddeeff00",
+      "reason": "commitment_mismatch"
+    },
+    {
+      "v": 3,
+      "type": "PING",
+      "message_id": "10000000-0000-4000-8000-00000000001a",
+      "sent_at_ms": 1791727200000
+    },
+    {
+      "v": 3,
+      "type": "PONG",
+      "message_id": "10000000-0000-4000-8000-00000000001b",
+      "reply_to": "10000000-0000-4000-8000-00000000001a"
+    },
+    {
+      "v": 3,
+      "type": "UNPAIR",
+      "message_id": "10000000-0000-4000-8000-00000000001c",
+      "revocation_id": "11223344-5566-4788-99aa-bbccddeeff00",
+      "revoked_at_ms": 1791727200000,
+      "reason": "user_request"
+    },
+    {
+      "v": 3,
+      "type": "UNPAIR_ACK",
+      "message_id": "10000000-0000-4000-8000-00000000001d",
+      "revocation_id": "11223344-5566-4788-99aa-bbccddeeff00"
+    },
+    {
+      "v": 3,
+      "type": "ERROR",
+      "message_id": "10000000-0000-4000-8000-00000000001e",
+      "code": "invalid_state",
+      "detail": ""
+    },
+    {
+      "v": 3,
+      "type": "CLIPBOARD_IMAGE_ABORT",
+      "message_id": "10000000-0000-4000-8000-000000000030",
+      "clip_id": "12345678-9abc-4def-8012-3456789abcde",
+      "reason": "sender_cancelled"
+    },
+    {
+      "v": 3,
+      "type": "PAIR_REJECT",
+      "message_id": "10000000-0000-4000-8000-000000000031",
+      "request_id": "11223344-5566-4788-99aa-bbccddeeff00",
+      "reason": "pairing_busy"
+    },
+    {
+      "v": 3,
+      "type": "FILE_REJECT",
+      "message_id": "10000000-0000-4000-8000-000000000032",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "reason": "destination_exists"
+    },
+    {
+      "v": 3,
+      "type": "FILE_RESULT",
+      "message_id": "10000000-0000-4000-8000-000000000033",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "status": "failed",
+      "reason": "destination_exists"
+    }
+  ]
+}

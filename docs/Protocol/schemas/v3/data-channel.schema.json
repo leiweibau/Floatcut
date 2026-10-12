@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/data-channel.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_OPEN"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "control_binding_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "accept_token": {
+          "$ref": "common.schema.json#/$defs/nonce32"
+        },
+        "transfer_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "required": [
+        "offer_sha256",
+        "control_binding_sha256",
+        "accept_token",
+        "transfer_id"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_READY"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "chunk_size": {
+          "const": 262144
+        },
+        "transfer_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "required": [
+        "offer_sha256",
+        "chunk_size",
+        "transfer_id"
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "control.schema.json"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "ERROR"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

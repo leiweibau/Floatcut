@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/file-transfer.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_OFFER"
+        },
+        "target_device_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "file_name": {
+          "$ref": "common.schema.json#/$defs/fileName"
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8589934592
+        },
+        "content_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "target_device_id",
+        "file_name",
+        "byte_size",
+        "content_sha256",
+        "offer_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_ACCEPT"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "accept_token": {
+          "$ref": "common.schema.json#/$defs/nonce32"
+        },
+        "expires_in_ms": {
+          "const": 15000
+        }
+      },
+      "required": [
+        "offer_sha256",
+        "accept_token",
+        "expires_in_ms"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_REJECT"
+        },
+        "reason": {
+          "enum": [
+            "user_rejected",
+            "disabled",
+            "busy",
+            "too_large",
+            "no_space",
+            "invalid_offer",
+            "duplicate_transfer",
+            "timeout",
+            "unsupported",
+            "unsupported_destination",
+            "destination_exists"
+          ]
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_CANCEL"
+        },
+        "reason": {
+          "enum": [
+            "user_cancelled",
+            "timeout",
+            "io_error",
+            "revoked",
+            "control_lost",
+            "data_error"
+          ]
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_STATUS_REQUEST"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "offer_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_RESULT"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "offer_sha256"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "saved"
+            },
+            "byte_size": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8589934592
+            },
+            "content_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            }
+          },
+          "required": [
+            "status",
+            "byte_size",
+            "content_sha256"
+          ]
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "pending"
+            },
+            "phase": {
+              "enum": [
+                "offered",
+                "accepted",
+                "receiving",
+                "committing"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "phase"
+          ]
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "unknown"
+            },
+            "reason": {
+              "const": "receipt_missing"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "cancelled"
+            },
+            "reason": {
+              "enum": [
+                "user_cancelled",
+                "peer_cancelled",
+                "revoked"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "reason": {
+              "enum": [
+                "data_timeout",
+                "channel_timeout",
+                "control_lost",
+                "io_error",
+                "size_mismatch",
+                "hash_mismatch",
+                "invalid_data",
+                "no_space",
+                "invalid_state",
+                "destination_exists"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        }
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "FILE_PROGRESS"
+        },
+        "offer_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "received_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8589934592
+        },
+        "phase": {
+          "enum": [
+            "receiving",
+            "committing"
+          ]
+        }
+      },
+      "required": [
+        "offer_sha256",
+        "received_bytes",
+        "phase"
+      ]
+    }
+  ],
+  "properties": {
+    "transfer_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  },
+  "required": [
+    "transfer_id"
+  ]
+}

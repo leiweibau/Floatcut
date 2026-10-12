@@ -1,0 +1,118 @@
+{
+  "description": "Receiver-authored byte progress for the three-byte file-transfer.json offer; no percentage is sent on the wire. A 100% counter alone does not establish saved.",
+  "offer": {
+    "v": 3,
+    "type": "FILE_OFFER",
+    "message_id": "10000000-0000-4000-8000-00000000000d",
+    "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+    "target_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+    "file_name": "report.txt",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+  },
+  "messages": [
+    {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000100",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 0,
+      "phase": "receiving"
+    },
+    {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000101",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 3,
+      "phase": "receiving"
+    },
+    {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000102",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 3,
+      "phase": "committing"
+    }
+  ],
+  "percentage_vectors": [
+    {
+      "byte_size": 3,
+      "received_bytes": 0,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 0
+    },
+    {
+      "byte_size": 3,
+      "received_bytes": 3,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 100
+    },
+    {
+      "byte_size": 3,
+      "received_bytes": 3,
+      "phase": "committing",
+      "valid_end": true,
+      "percent": 100
+    },
+    {
+      "byte_size": 524291,
+      "received_bytes": 262144,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 49
+    },
+    {
+      "byte_size": 524291,
+      "received_bytes": 524288,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 99
+    },
+    {
+      "byte_size": 8589934592,
+      "received_bytes": 262144,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 0
+    },
+    {
+      "byte_size": 0,
+      "received_bytes": 0,
+      "phase": "receiving",
+      "valid_end": false,
+      "percent": 0
+    },
+    {
+      "byte_size": 0,
+      "received_bytes": 0,
+      "phase": "committing",
+      "valid_end": true,
+      "percent": 100
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 0,
+      "message_index": 0,
+      "trigger": "ready"
+    },
+    {
+      "at_ms": 1000,
+      "message_index": 1,
+      "trigger": "validated_and_written_data"
+    },
+    {
+      "at_ms": 1000,
+      "message_index": 2,
+      "trigger": "valid_end"
+    }
+  ]
+}

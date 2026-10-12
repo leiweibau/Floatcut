@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/clipboard-image.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "clip_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  },
+  "required": [
+    "clip_id"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "CLIPBOARD_IMAGE_BEGIN"
+        },
+        "source_device_id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "created_at_ms": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "content_type": {
+          "enum": [
+            "image/png",
+            "image/jpeg"
+          ]
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 16777216
+        },
+        "content_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "chunk_size": {
+          "const": 49152
+        },
+        "chunk_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 342
+        },
+        "hop_count": {
+          "const": 0
+        }
+      },
+      "required": [
+        "source_device_id",
+        "created_at_ms",
+        "content_type",
+        "byte_size",
+        "content_sha256",
+        "chunk_size",
+        "chunk_count",
+        "hop_count"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "content_type": {
+                "const": "image/png"
+              }
+            },
+            "required": [
+              "content_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "byte_size": {
+                "minimum": 8
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "CLIPBOARD_IMAGE_CHUNK"
+        },
+        "chunk_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 341
+        },
+        "data_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 49152
+        },
+        "data_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "data": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536,
+          "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "chunk_index",
+        "data_size",
+        "data_sha256",
+        "data"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "CLIPBOARD_IMAGE_COMMIT"
+        }
+      },
+      "required": []
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "CLIPBOARD_IMAGE_ABORT"
+        },
+        "reason": {
+          "enum": [
+            "sender_cancelled",
+            "timeout",
+            "io_error"
+          ]
+        }
+      },
+      "required": []
+    }
+  ]
+}

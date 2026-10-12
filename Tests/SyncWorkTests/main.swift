@@ -45,7 +45,7 @@ expect(preparation.consume(secondTicket), "new preparation after off/on")
 expect(!preparation.consume(secondTicket), "preparation is consumed only once")
 
 let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf:
-    URL(fileURLWithPath: "docs/Protocol/fixtures/v2/image-transfer.json"))) as! [String: Any]
+    URL(fileURLWithPath: "docs/Protocol/fixtures/v3/image-transfer.json"))) as! [String: Any]
 let objects = fixture["messages"] as! [[String: Any]]
 let begin = try FloatcutSyncWireMessage(object: objects[0])
 let chunk = try FloatcutSyncWireMessage(object: objects[2])

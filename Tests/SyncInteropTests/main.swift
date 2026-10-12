@@ -1,73 +1,71 @@
 import Foundation
-import AppKit
 
-let directory = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
-if CommandLine.arguments[1] == "emit" {
-    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 900,
-        bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-    var random: UInt32 = 42
-    for index in 0..<(bitmap.bytesPerRow * bitmap.pixelsHigh) {
-        random = random &* 1_664_525 &+ 1_013_904_223
-        bitmap.bitmapData![index] = UInt8(truncatingIfNeeded: random >> 24)
-    }
-    var frames = Data()
-    let text = "Floatcut SRC interoperability: ä🙂\n\"quoted\""
-    let textBytes = Data(text.utf8)
-    frames.append(try FloatcutSyncCodec.encode(FloatcutSyncWireMessage(type: "CLIPBOARD_UPDATE", fields: [
-        "clip_id": FloatcutSyncProtocol.uuidV4(), "source_device_id": FloatcutSyncProtocol.uuidV4(),
-        "created_at_ms": 1, "content_type": FloatcutSyncProtocol.contentType, "utf8_size": textBytes.count,
-        "content_sha256": FloatcutSyncProtocol.sha256Hex(textBytes), "hop_count": 0, "content": text,
-    ])))
-    for (format, mime, name): (NSBitmapImageRep.FileType, String, String) in [(.png, "image/png", "png"), (.jpeg, "image/jpeg", "jpeg")] {
-        let data = bitmap.representation(using: format, properties: [.compressionFactor: 0.85])!
-        try data.write(to: directory.appendingPathComponent("source.\(name)"))
-        let clipID = FloatcutSyncProtocol.uuidV4()
-        let count = (data.count + FloatcutSyncProtocol.imageChunkBytes - 1) / FloatcutSyncProtocol.imageChunkBytes
-        frames.append(try FloatcutSyncCodec.encode(FloatcutSyncWireMessage(type: "CLIPBOARD_IMAGE_BEGIN", fields: [
-            "clip_id": clipID, "source_device_id": FloatcutSyncProtocol.uuidV4(), "created_at_ms": 1,
-            "content_type": mime, "byte_size": data.count, "content_sha256": FloatcutSyncProtocol.sha256Hex(data),
-            "chunk_size": FloatcutSyncProtocol.imageChunkBytes, "chunk_count": count, "hop_count": 0,
-        ])))
-        for index in 0..<count {
-            let start = index * FloatcutSyncProtocol.imageChunkBytes
-            let chunk = data.subdata(in: start..<min(start + FloatcutSyncProtocol.imageChunkBytes, data.count))
-            frames.append(try FloatcutSyncCodec.encode(FloatcutSyncWireMessage(type: "CLIPBOARD_IMAGE_CHUNK", fields: [
-                "clip_id": clipID, "chunk_index": index, "data_size": chunk.count,
-                "data_sha256": FloatcutSyncProtocol.sha256Hex(chunk), "data": FloatcutSyncProtocol.base64URL(chunk),
-            ])))
-        }
-        frames.append(try FloatcutSyncCodec.encode(FloatcutSyncWireMessage(type: "CLIPBOARD_IMAGE_COMMIT", fields: ["clip_id": clipID])))
-        print("Floatcut emitted \(mime): \(data.count) bytes, \(count) chunks")
-    }
-    try frames.write(to: directory.appendingPathComponent("floatcut.frames"))
-} else {
-    let bytes = try Data(contentsOf: directory.appendingPathComponent("src.frames"))
-    var decoder = FloatcutSyncFrameDecoder()
-    var file: FloatcutIncomingImageFile?
-    var images = 0
-    var texts = 0
-    for offset in stride(from: 0, to: bytes.count, by: 7919) {
-        for message in try decoder.append(bytes.subdata(in: offset..<min(bytes.count, offset + 7919))) {
-            switch message.type {
-            case "CLIPBOARD_UPDATE": texts += 1
-            case "CLIPBOARD_IMAGE_BEGIN":
-                precondition(file == nil)
-                file = try FloatcutIncomingImageFile(message: message, directory: directory.appendingPathComponent("incoming"))
-            case "CLIPBOARD_IMAGE_CHUNK": try file!.append(message)
-            case "CLIPBOARD_IMAGE_COMMIT":
-                let data = try file!.finish()
-                let suffix = file!.contentType == "image/png" ? "png" : "jpeg"
-                let expected = try Data(contentsOf: directory.appendingPathComponent("source.\(suffix)"))
-                precondition(data == expected, "SRC round trip changed image bytes")
-                file!.cleanup()
-                file = nil
-                images += 1
-            default: fatalError("unexpected fixture message")
-            }
-        }
-    }
-    try decoder.finish()
-    precondition(images == 2 && texts == 1 && file == nil)
-    print("SRC → Floatcut: text and multi-chunk PNG/JPEG validated, byte-identical; no TLS/discovery test")
+let fixtures = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+let artifacts = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+func fixture(_ name: String) throws -> Any {
+    try JSONSerialization.jsonObject(with: Data(contentsOf: fixtures.appendingPathComponent(name)))
 }
+let pairingVectors = try fixture("pairing-vectors.json") as! [[String: Any]]
+var objects: [[String: Any]] = [try fixture("clipboard-update.json") as! [String: Any]]
+var channels = ["control"]
+for name in ["image-transfer.json", "file-transfer.json", "control-messages.json", "progress-messages.json"] {
+    let messages = (try fixture(name) as! [String: Any])["messages"] as! [[String: Any]]
+    objects.append(contentsOf: messages)
+    channels.append(contentsOf: Array(repeating: "control", count: messages.count))
+}
+for vector in pairingVectors {
+    let messages = vector["messages"] as! [[String: Any]]
+    objects.append(contentsOf: messages)
+    channels.append(contentsOf: Array(repeating: "control", count: messages.count))
+}
+let file = try fixture("file-transfer.json") as! [String: Any]
+let preludes = file["data_messages"] as! [[String: Any]]
+objects.append(contentsOf: preludes)
+channels.append(contentsOf: Array(repeating: "file", count: preludes.count))
+var frames = Data()
+for (index, object) in objects.enumerated() {
+    let message = try FloatcutSyncWireMessage(object: object)
+    let maximum = channels[index] == "file" ? FloatcutSyncProtocol.maximumFilePreludeBytes : FloatcutSyncProtocol.maximumFrameBytes
+    let encoded = try FloatcutSyncCodec.encode(message, maximumFrameBytes: maximum)
+    var decoder = FloatcutSyncFrameDecoder(maximumFrameBytes: maximum)
+    var decoded = [FloatcutSyncWireMessage]()
+    for byte in encoded { decoded.append(contentsOf: try decoder.append(Data([byte]))) }
+    try decoder.finish()
+    precondition(decoded.count == 1 && NSDictionary(dictionary: decoded[0].object).isEqual(to: object))
+    frames.append(encoded)
+}
+try frames.write(to: artifacts.appendingPathComponent("floatcut-v3.frames"))
+try JSONSerialization.data(withJSONObject: channels).write(to: artifacts.appendingPathComponent("channels.json"))
+
+var results = [[String: Any]]()
+for vector in pairingVectors {
+    let iid = vector["initiator_device_id"] as! String
+    let aid = vector["acceptor_device_id"] as! String
+    let ipin = vector["initiator_certificate_sha256"] as! String
+    let apin = vector["acceptor_certificate_sha256"] as! String
+    let request = vector["request_id"] as! String
+    let binding = try FloatcutSyncProtocol.controlBinding(dialerDeviceID: iid, dialerCertificateSHA256: ipin,
+        dialerNonce: FloatcutSyncProtocol.dataFromHex(vector["initiator_hello_nonce_hex"] as! String),
+        listenerDeviceID: aid, listenerCertificateSHA256: apin,
+        listenerNonce: FloatcutSyncProtocol.dataFromHex(vector["acceptor_hello_nonce_hex"] as! String))
+    let inonce = try FloatcutSyncProtocol.dataFromHex(vector["initiator_nonce_hex"] as! String)
+    let anonce = try FloatcutSyncProtocol.dataFromHex(vector["acceptor_nonce_hex"] as! String)
+    let icommit = try FloatcutSyncProtocol.pairingCommitment(role: "initiator", requestID: request, controlBindingSHA256: binding,
+        initiatorDeviceID: iid, initiatorCertificateSHA256: ipin, acceptorDeviceID: aid, acceptorCertificateSHA256: apin, nonce: inonce)
+    let acommit = try FloatcutSyncProtocol.pairingCommitment(role: "acceptor", requestID: request, controlBindingSHA256: binding,
+        initiatorDeviceID: iid, initiatorCertificateSHA256: ipin, acceptorDeviceID: aid, acceptorCertificateSHA256: apin, nonce: anonce)
+    let transcript = try FloatcutSyncProtocol.pairingTranscript(requestID: request, controlBindingSHA256: binding,
+        initiatorDeviceID: iid, initiatorCertificateSHA256: ipin, initiatorNonce: inonce,
+        acceptorDeviceID: aid, acceptorCertificateSHA256: apin, acceptorNonce: anonce,
+        initiatorCommitmentSHA256: icommit, acceptorCommitmentSHA256: acommit)
+    results.append(["control_binding_sha256": binding, "initiator_commitment_sha256": icommit,
+        "acceptor_commitment_sha256": acommit, "transcript_sha256": transcript.sha256, "comparison_code": transcript.comparisonCode])
+}
+let offer = (file["messages"] as! [[String: Any]])[0]
+let digest = try FloatcutSyncProtocol.fileOfferDigest(transferID: offer["transfer_id"] as! String,
+    controlBindingSHA256: file["control_binding_sha256"] as! String, senderDeviceID: file["sender_device_id"] as! String,
+    receiverDeviceID: file["receiver_device_id"] as! String, byteSize: (offer["byte_size"] as! NSNumber).int64Value,
+    contentSHA256: offer["content_sha256"] as! String, fileName: offer["file_name"] as! String)
+try JSONSerialization.data(withJSONObject: ["pairing": results, "offer_sha256": digest])
+    .write(to: artifacts.appendingPathComponent("floatcut-v3-digests.json"))
+print("Swift V3 fixture codec: \(objects.count) messages, fragmented round trips, pairing/offer digests")

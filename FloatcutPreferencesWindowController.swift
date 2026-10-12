@@ -1116,6 +1116,18 @@ private struct SynchronizationPreferencesView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
+                    Toggle("Allow incoming file transfer requests", isOn: Binding(
+                        get: { sync.allowsIncomingFileTransfers },
+                        set: { sync.setAllowsIncomingFileTransfers($0) }
+                    ))
+                    Text("Each received file requires your approval and a destination folder before any file data is transferred.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("Floatcut Sync now uses protocol v3. Previously paired devices must be paired again. The local sync identity is preserved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     Toggle("Allow new pairing requests", isOn: Binding(
                         get: { sync.allowsNewPairingRequests },
                         set: { sync.setAllowsNewPairingRequests($0) }
@@ -1167,8 +1179,8 @@ private struct SynchronizationPreferencesView: View {
                         Text("No devices have been paired.")
                             .foregroundStyle(.secondary)
                     }
-                    if sync.pairedPeers.count >= 10 {
-                        Label("The limit of ten paired devices has been reached.", systemImage: "person.3.fill")
+                    if sync.pairedPeers.count >= FloatcutSyncProtocol.maximumPeers {
+                        Label("The limit of 32 paired devices has been reached.", systemImage: "person.3.fill")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1239,11 +1251,11 @@ private struct SynchronizationPreferencesView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if device.protocolVersion != FloatcutSyncProtocol.version || device.capabilities != FloatcutSyncProtocol.capabilities {
+                            if device.protocolVersion != FloatcutSyncProtocol.version || !FloatcutSyncProtocol.areValidCapabilities(device.capabilities) {
                                 Text("Incompatible").foregroundStyle(.secondary)
                             } else {
                                 Button("Pair") { sync.pair(deviceID: device.deviceID) }
-                                    .disabled(!device.allowsPairing || sync.pairedPeers.count >= 10)
+                                    .disabled(!device.allowsPairing || sync.pairedPeers.count >= FloatcutSyncProtocol.maximumPeers)
                             }
                         }
                     }
@@ -1597,6 +1609,11 @@ private struct PreferencesWindowContentView: View {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    public func showSynchronizationAndFocus() {
+        bridge.selectedTab = .synchronization
+        showAndFocus()
     }
 
     public func refreshDynamicContent() {

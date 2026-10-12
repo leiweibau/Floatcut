@@ -1,0 +1,62 @@
+[
+  {
+    "name": "unknown-opcode.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "zero-data-bytes.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "wrong-offset.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "excess-data.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "wrong-end-size.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "wrong-end-hash.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "wrong-end-length.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "truncated-data-header.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "truncated-data-payload.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "missing-end.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "oversized-data-record.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  {
+    "name": "short-middle-chunk.bin",
+    "byte_size": 3,
+    "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  }
+]

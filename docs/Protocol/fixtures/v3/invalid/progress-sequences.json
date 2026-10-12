@@ -1,0 +1,66 @@
+[
+  {
+    "name": "progress-counter-regression",
+    "messages": [
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000100",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 0,
+        "phase": "receiving"
+      },
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000101",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 3,
+        "phase": "receiving"
+      },
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000103",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 0,
+        "phase": "receiving"
+      }
+    ]
+  },
+  {
+    "name": "progress-phase-regression",
+    "messages": [
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000100",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 0,
+        "phase": "receiving"
+      },
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000102",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 3,
+        "phase": "committing"
+      },
+      {
+        "v": 3,
+        "type": "FILE_PROGRESS",
+        "message_id": "10000000-0000-4000-8000-000000000104",
+        "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+        "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+        "received_bytes": 3,
+        "phase": "receiving"
+      }
+    ]
+  }
+]

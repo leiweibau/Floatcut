@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://floatcut.local/protocol/v3/pairing.schema.json",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_REQUEST"
+        },
+        "initiator_commitment_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "initiator_commitment_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_CHALLENGE"
+        },
+        "acceptor_commitment_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "acceptor_commitment_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_REVEAL"
+        },
+        "role": {
+          "enum": [
+            "initiator",
+            "acceptor"
+          ]
+        },
+        "nonce": {
+          "$ref": "common.schema.json#/$defs/nonce32"
+        }
+      },
+      "required": [
+        "role",
+        "nonce"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_CONFIRM"
+        },
+        "transcript_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "transcript_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_STATUS"
+        },
+        "transcript_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "state": {
+          "enum": [
+            "awaiting_confirmation",
+            "confirmed",
+            "complete"
+          ]
+        }
+      },
+      "required": [
+        "transcript_sha256",
+        "state"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_COMPLETE"
+        },
+        "transcript_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "transcript_sha256"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "PAIR_REJECT"
+        },
+        "reason": {
+          "enum": [
+            "user_rejected",
+            "timeout",
+            "peer_limit",
+            "pairing_disabled",
+            "already_paired",
+            "invalid_request",
+            "commitment_mismatch",
+            "pairing_busy"
+          ]
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    }
+  ],
+  "properties": {
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  },
+  "required": [
+    "request_id"
+  ]
+}

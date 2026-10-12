@@ -6,6 +6,38 @@ import Network
 import os.log
 import Security
 
+private struct FloatcutTrustGeneration: Codable {
+    let deviceID: String
+    let generation: UInt64
+}
+
+private func negotiatedProtocol(_ connection: NWConnection) -> String? {
+    guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata,
+          !sec_protocol_metadata_get_early_data_accepted(metadata.securityProtocolMetadata) else { return nil }
+    if #available(macOS 15.5, *) {
+        guard let value = sec_protocol_metadata_copy_negotiated_protocol(metadata.securityProtocolMetadata) else { return nil }
+        defer { free(UnsafeMutableRawPointer(mutating: value)) }
+        return String(cString: value)
+    }
+    guard let value = sec_protocol_metadata_get_negotiated_protocol(metadata.securityProtocolMetadata) else { return nil }
+    return String(cString: value)
+}
+
+private func authenticatedTLSContext(_ connection: NWConnection) -> FloatcutTLSPeerContext? {
+    guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return nil }
+    var chain: [SecCertificate] = []
+    let accessible = sec_protocol_metadata_access_peer_certificate_chain(metadata.securityProtocolMetadata) { certificate in
+        chain.append(sec_certificate_copy_ref(certificate).takeRetainedValue())
+    }
+    guard accessible, chain.count == 1, let certificate = chain.first,
+          let deviceID = FloatcutTLSHandshakeRegistry.deviceID(from: certificate),
+          FloatcutSyncCertificateValidator.validate(certificate: certificate, expectedDeviceID: deviceID),
+          let publicKey = FloatcutSyncCertificateValidator.subjectPublicKeyInfo(certificate: certificate) else { return nil }
+    let der = SecCertificateCopyData(certificate) as Data
+    return FloatcutTLSPeerContext(deviceID: deviceID, certificate: certificate, certificateDER: der,
+                                  certificateSHA256: FloatcutSyncProtocol.sha256Hex(der), publicKeyData: publicKey, recordedAt: Date())
+}
+
 @objc public protocol FloatcutSyncClipboardDelegate: AnyObject {
     /// Called on the main thread. Return one of applied, duplicate, skipped, unsupported, invalid.
     func syncCoordinator(_ coordinator: FloatcutSyncCoordinator, didReceiveText text: String, peerName: String, peerDeviceID: String, clipID: String) -> String
@@ -42,42 +74,126 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     @Published private(set) var identityResetRecommended = false
     @Published private(set) var localDeviceID = ""
     @Published private(set) var localCertificateSHA256 = ""
+    @Published private(set) var fileClientTargets: [FloatcutFileClientTarget] = []
+    @Published private(set) var fileTransfers: [FloatcutFileTransferSnapshot] = []
 
     public weak var clipboardDelegate: FloatcutSyncClipboardDelegate?
 
-    private let peerStore = FloatcutSyncPersistentStore<FloatcutSyncPeer>(fileName: "peers-v2.json")
-    private let revocationStore = FloatcutSyncPersistentStore<FloatcutSyncRevocation>(fileName: "revocations-v2.json")
-    private let pendingStore = FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>(fileName: "pending-pairings-v2.json")
-    private let legacyPeerStore = FloatcutSyncPersistentStore<FloatcutSyncPeer>(fileName: "peers-v1.json")
-    private let legacyRevocationStore = FloatcutSyncPersistentStore<FloatcutSyncRevocation>(fileName: "revocations-v1.json")
-    private let legacyPendingStore = FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>(fileName: "pending-pairings-v1.json")
+    private let peerStore: FloatcutSyncPersistentStore<FloatcutSyncPeer>
+    private let revocationStore: FloatcutSyncPersistentStore<FloatcutSyncRevocation>
+    private let pendingStore: FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>
+    private let generationStore: FloatcutSyncPersistentStore<FloatcutTrustGeneration>
+    private let legacyPeerStore: FloatcutSyncPersistentStore<FloatcutSyncPeer>
+    private let legacyRevocationStore: FloatcutSyncPersistentStore<FloatcutSyncRevocation>
+    private let legacyPendingStore: FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>
+    private let archivedV2PeerStore: FloatcutSyncPersistentStore<FloatcutSyncPeer>
+    private let archivedV2PendingStore: FloatcutSyncPersistentStore<FloatcutSyncPendingPairing>
+    private let archivedV2RevocationStore: FloatcutSyncPersistentStore<FloatcutSyncRevocation>
+    private let defaults: UserDefaults
+    private let identityStore: FloatcutSyncIdentityStore
+    fileprivate let storageDirectory: URL?
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+    @nonobjc fileprivate var testHooks: FloatcutSyncCoordinatorTestHooks?
+#endif
     private let logger = Logger(subsystem: "de.meierkarsten.floatcut", category: "clipboard-sync")
     private var engine: FloatcutSyncEngine?
+    private var retiredEngines: [UInt64: FloatcutSyncEngine] = [:]
     private let snapshotGate = FloatcutSyncSnapshotGate()
     // Keep accepted clip IDs across transport reconnections, as the Windows
     // client does. The per-connection replay cache still rejects wire retries.
     private var acceptedRemoteClipKeys: [String] = []
 
-    private override init() {
+    private override convenience init() {
+        self.init(defaults: .standard, storageDirectory: nil, identityStore: .shared)
+    }
+
+    private init(defaults: UserDefaults, storageDirectory: URL?, identityStore: FloatcutSyncIdentityStore) {
+        self.defaults = defaults
+        self.storageDirectory = storageDirectory
+        self.identityStore = identityStore
+        peerStore = FloatcutSyncPersistentStore(fileName: "peers-v3.json", baseDirectory: storageDirectory)
+        revocationStore = FloatcutSyncPersistentStore(fileName: "revocations-v3.json", baseDirectory: storageDirectory)
+        pendingStore = FloatcutSyncPersistentStore(fileName: "pending-pairings-v3.json", baseDirectory: storageDirectory)
+        generationStore = FloatcutSyncPersistentStore(fileName: "trust-generations-v3.json", baseDirectory: storageDirectory)
+        legacyPeerStore = FloatcutSyncPersistentStore(fileName: "peers-v1.json", baseDirectory: storageDirectory)
+        legacyRevocationStore = FloatcutSyncPersistentStore(fileName: "revocations-v1.json", baseDirectory: storageDirectory)
+        legacyPendingStore = FloatcutSyncPersistentStore(fileName: "pending-pairings-v1.json", baseDirectory: storageDirectory)
+        archivedV2PeerStore = FloatcutSyncPersistentStore(fileName: "peers-v2.json", baseDirectory: storageDirectory)
+        archivedV2PendingStore = FloatcutSyncPersistentStore(fileName: "pending-pairings-v2.json", baseDirectory: storageDirectory)
+        archivedV2RevocationStore = FloatcutSyncPersistentStore(fileName: "revocations-v2.json", baseDirectory: storageDirectory)
         super.init()
         pairedPeers = peerStore.read()
         revocations = revocationStore.read()
-        repairCompletedPendingPairings()
         purgeExpiredPendingPairings()
-        showV2RepairingNoticeIfNeeded()
+        showV3RepairingNoticeIfNeeded()
     }
 
     public var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "floatcutSyncEnabled")
+        defaults.bool(forKey: "floatcutSyncEnabled")
     }
 
     public var allowsNewPairingRequests: Bool {
-        let defaults = UserDefaults.standard
         guard defaults.object(forKey: "floatcutSyncAllowsNewPairings") != nil else { return true }
         return defaults.bool(forKey: "floatcutSyncAllowsNewPairings")
     }
 
     public var isDiagnosticLoggingEnabled: Bool { FloatcutSyncDiagnostics.shared.isEnabled }
+
+    public var allowsIncomingFileTransfers: Bool {
+        defaults.object(forKey: "floatcutSyncAllowsIncomingFiles") as? Bool ?? true
+    }
+
+    public func setAllowsIncomingFileTransfers(_ allowed: Bool) {
+        defaults.set(allowed, forKey: "floatcutSyncAllowsIncomingFiles")
+        engine?.incomingFilesPreferenceChanged(allowed)
+        objectWillChange.send()
+    }
+
+    @nonobjc func sendFile(url: URL, peer: FloatcutFileClientTarget) {
+        guard let context = peer.context, peer.isAvailable else { return }
+        engine?.beginFileSend(url: url, peer: context)
+    }
+
+    public func acceptFileTransfer(id: String, directory: URL, revision: UInt64, engineEpoch: UInt64) {
+        engine?.acceptFile(id: id, directory: directory, revision: revision, expectedEpoch: engineEpoch)
+    }
+
+    public func rejectFileTransfer(id: String, revision: UInt64, engineEpoch: UInt64) {
+        engine?.rejectFile(id: id, revision: revision, expectedEpoch: engineEpoch)
+    }
+
+    public func cancelFileTransfer(id: String, revision: UInt64, engineEpoch: UInt64) {
+        engine?.cancelFile(id: id, revision: revision, expectedEpoch: engineEpoch)
+    }
+
+    public func refreshFileTransferStatus(id: String) { engine?.refreshFileStatus(id: id) }
+
+    @nonobjc func updateFilePresentation(targets: [FloatcutFileClientTarget], transfers: [FloatcutFileTransferSnapshot],
+                                         epoch: UInt64, revision: UInt64) {
+        DispatchQueue.main.async {
+            let currentEpoch = epoch == self.snapshotGate.epoch
+            if currentEpoch {
+                guard self.snapshotGate.accepts(epoch: epoch, revision: revision) else { return }
+                self.fileClientTargets = targets
+            }
+            var merged = Dictionary(uniqueKeysWithValues: self.fileTransfers.map { ($0.id, $0) })
+            for transfer in transfers {
+                if let existing = merged[transfer.id] {
+                    let sameEpoch = existing.engineEpoch == transfer.engineEpoch && transfer.revision > existing.revision
+                    let recovered = currentEpoch && transfer.engineEpoch > existing.engineEpoch &&
+                        (existing.phase == .unconfirmed || existing.phase == .committing) && transfer.phase.isTerminal &&
+                        existing.peerDeviceID == transfer.peerDeviceID && existing.direction == transfer.direction &&
+                        existing.fileName == transfer.fileName && existing.byteSize == transfer.byteSize
+                    guard sameEpoch || recovered,
+                          currentEpoch || transfer.phase.isTerminal || transfer.phase == .committing else { continue }
+                } else if !currentEpoch { continue }
+                merged[transfer.id] = transfer
+            }
+            let active = merged.values.filter { !$0.phase.isTerminal }
+            let terminal = merged.values.filter { $0.phase.isTerminal }.sorted { $0.revision > $1.revision }.prefix(50)
+            self.fileTransfers = Array(active) + Array(terminal)
+        }
+    }
 
     public var diagnosticLogPath: String { FloatcutSyncDiagnostics.shared.logFileURL.path }
 
@@ -95,7 +211,7 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     public func setAllowsNewPairingRequests(_ allowed: Bool) {
-        UserDefaults.standard.set(allowed, forKey: "floatcutSyncAllowsNewPairings")
+        defaults.set(allowed, forKey: "floatcutSyncAllowsNewPairings")
         recordDiagnostic("pairing_requests_allowed_changed", ["allowed": allowed ? "true" : "false"])
         engine?.refreshAdvertisement()
         objectWillChange.send()
@@ -103,12 +219,12 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     public var deviceName: String {
         get {
-            let stored = UserDefaults.standard.string(forKey: "floatcutSyncDeviceName")
+            let stored = defaults.string(forKey: "floatcutSyncDeviceName")
             let fallback = Host.current().localizedName ?? "Mac"
             return FloatcutSyncProtocol.truncateDeviceName(stored?.isEmpty == false ? stored! : fallback)
         }
         set {
-            UserDefaults.standard.set(FloatcutSyncProtocol.truncateDeviceName(newValue), forKey: "floatcutSyncDeviceName")
+            defaults.set(FloatcutSyncProtocol.truncateDeviceName(newValue), forKey: "floatcutSyncDeviceName")
             engine?.refreshAdvertisement()
             objectWillChange.send()
         }
@@ -124,16 +240,24 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     public func setEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "floatcutSyncEnabled")
+        defaults.set(enabled, forKey: "floatcutSyncEnabled")
         recordDiagnostic(enabled ? "sync_enable_requested" : "sync_disable_requested")
         if enabled {
             guard engine == nil else { return }
             do {
+                guard peerStore.isHealthy, pendingStore.isHealthy, revocationStore.isHealthy, generationStore.isHealthy else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
                 let epoch = snapshotGate.beginEpoch()
-                let identity = try FloatcutSyncIdentityStore.shared.loadOrCreate()
+                let identity = try identityStore.loadOrCreate()
                 localDeviceID = identity.deviceID
                 localCertificateSHA256 = identity.certificateSHA256
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+                let engine = FloatcutSyncEngine(identity: identity, coordinator: self, epoch: epoch,
+                                                clock: testHooks?.clock ?? FloatcutSyncContinuousClock())
+#else
                 let engine = FloatcutSyncEngine(identity: identity, coordinator: self, epoch: epoch)
+#endif
                 self.engine = engine
                 statusText = NSLocalizedString("Starting local discovery…", comment: "")
                 recordDiagnostic("sync_identity_ready")
@@ -143,22 +267,27 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
                 statusText = error.localizedDescription
                 securityWarning = error.localizedDescription
                 identityResetRecommended = error is FloatcutSyncIdentityError
-                UserDefaults.standard.set(false, forKey: "floatcutSyncEnabled")
+                defaults.set(false, forKey: "floatcutSyncEnabled")
             }
         } else {
             _ = snapshotGate.beginEpoch()
-            engine?.stop()
+            if let engine { retiredEngines[engine.epochValue] = engine; engine.stop() }
             engine = nil
             discoveredPeers = []
             onlineDeviceIDs = []
+            refreshDisabledFileTargets()
             statusText = NSLocalizedString("Synchronisation is disabled.", comment: "")
             recordDiagnostic("sync_disabled")
         }
     }
 
     public func shutdown() {
-        engine?.stop()
+        if let engine { retiredEngines[engine.epochValue] = engine; engine.stop() }
         engine = nil
+    }
+
+    fileprivate func releaseRetiredEngine(epoch: UInt64) {
+        DispatchQueue.main.async { self.retiredEngines.removeValue(forKey: epoch) }
     }
 
     public func sendAcceptedLocalText(_ text: String) {
@@ -175,6 +304,14 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     func applyRemoteText(_ text: String, peer: FloatcutSyncPeer, clipID: String,
                          token: FloatcutSyncWorkToken, completion: @escaping (String) -> Void) {
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if let hold = testHooks?.holdRemoteText {
+            hold { [weak self] in
+                self?.applyRemoteText(text, peer: peer, clipID: clipID, token: token, completion: completion)
+            }
+            return
+        }
+#endif
         let started = FloatcutSyncDiagnostics.shared.startMeasurement()
         DispatchQueue.main.async {
             defer { FloatcutSyncDiagnostics.shared.recordElapsed("remote_text_ui_wait_and_apply", since: started) }
@@ -275,12 +412,12 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     public func pair(deviceID: String) {
         guard pairedPeers.count < FloatcutSyncProtocol.maximumPeers else {
-            statusText = NSLocalizedString("The limit of ten paired devices has been reached.", comment: "")
+            statusText = NSLocalizedString("The limit of 32 paired devices has been reached.", comment: "")
             return
         }
         guard let discovered = discoveredPeers.first(where: { $0.deviceID == deviceID }),
               discovered.protocolVersion == FloatcutSyncProtocol.version,
-              discovered.capabilities == FloatcutSyncProtocol.capabilities,
+              FloatcutSyncProtocol.areValidCapabilities(discovered.capabilities),
               discovered.allowsPairing
         else {
             statusText = NSLocalizedString("This device is not currently available for pairing.", comment: "")
@@ -299,19 +436,26 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     public func unpair(deviceID: String) {
+        if let engine { engine.performAuthorization { self.unpairOnAuthority(deviceID: deviceID) } }
+        else { unpairOnAuthority(deviceID: deviceID) }
+    }
+
+    private func unpairOnAuthority(deviceID: String) {
         guard let peer = pairedPeer(deviceID) else { return }
         let revocation = FloatcutSyncRevocation(
             peerDeviceID: peer.deviceID,
             certificateSHA256: peer.certificateSHA256,
             revocationID: FloatcutSyncProtocol.uuidV4(),
             revokedAtMS: Self.nowMS,
-            acknowledged: false
+            acknowledged: false,
+            trustGeneration: nextTrustGeneration(for: deviceID)
         )
         do {
             try revocationStore.mutate { records in
                 records.removeAll { $0.peerDeviceID == peer.deviceID }
                 records.append(revocation)
             }
+            try persistTrustGeneration(deviceID: deviceID, generation: revocation.trustGeneration)
             try peerStore.mutate { $0.removeAll { $0.deviceID == peer.deviceID } }
             try pendingStore.mutate { $0.removeAll { $0.peerDeviceID == peer.deviceID } }
             refreshStores()
@@ -324,10 +468,19 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     public func setPeerEnabled(deviceID: String, enabled: Bool) {
+        if let engine { engine.performAuthorization { self.setPeerEnabledOnAuthority(deviceID: deviceID, enabled: enabled) } }
+        else { setPeerEnabledOnAuthority(deviceID: deviceID, enabled: enabled) }
+    }
+
+    private func setPeerEnabledOnAuthority(deviceID: String, enabled: Bool) {
         guard var peer = pairedPeer(deviceID) else { return }
         peer.enabled = enabled
-        try? upsertPeer(peer)
-        engine?.peerActivationChanged(deviceID: deviceID)
+        do {
+            try upsertPeer(peer)
+            engine?.peerActivationChanged(deviceID: deviceID, enabled: enabled)
+        } catch {
+            DispatchQueue.main.async { self.statusText = error.localizedDescription }
+        }
     }
 
     public func setOutgoingImagesAllowed(deviceID: String, allowed: Bool) {
@@ -357,18 +510,21 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     public func resetIdentity() {
-        UserDefaults.standard.set(false, forKey: "floatcutSyncEnabled")
+        defaults.set(false, forKey: "floatcutSyncEnabled")
         _ = snapshotGate.beginEpoch()
-        engine?.stopAndWait()
+        if let engine { retiredEngines[engine.epochValue] = engine; engine.stopAndWait() }
         engine = nil
         do {
-            try FloatcutSyncIdentityStore.shared.reset()
+            try identityStore.reset()
             try peerStore.replace([])
             try pendingStore.replace([])
             try revocationStore.replace([])
             try legacyPeerStore.replace([])
             try legacyPendingStore.replace([])
             try legacyRevocationStore.replace([])
+            try archivedV2PeerStore.replace([])
+            try archivedV2PendingStore.replace([])
+            try archivedV2RevocationStore.replace([])
             localDeviceID = ""
             localCertificateSHA256 = ""
             refreshStores()
@@ -387,13 +543,37 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     func pairedPeerCount() -> Int { peerStore.read().count }
+    func allPairedPeers() -> [FloatcutSyncPeer] { peerStore.read() }
+    func activePendingPairings() -> [FloatcutSyncPendingPairing] { pendingStore.read().filter { $0.isValidSameBoot() && !$0.complete } }
+
+    func nextTrustGeneration(for deviceID: String) -> UInt64 {
+        let prior = max(generationStore.read().first { $0.deviceID == deviceID }?.generation ?? 0,
+                        max(pairedPeer(deviceID)?.trustGeneration ?? 0, revocation(for: deviceID)?.trustGeneration ?? 0))
+        return prior < UInt64.max ? prior + 1 : UInt64.max
+    }
+
+    private func persistTrustGeneration(deviceID: String, generation: UInt64) throws {
+        try generationStore.mutate { records in
+            let previous = records.first { $0.deviceID == deviceID }?.generation ?? 0
+            guard generation >= previous else { throw FloatcutSyncProtocolError.invalidState }
+            records.removeAll { $0.deviceID == deviceID }
+            records.append(FloatcutTrustGeneration(deviceID: deviceID, generation: generation))
+        }
+    }
+
+    func invalidatePairing(requestID: String) {
+        try? pendingStore.mutate { $0.removeAll { $0.requestID == requestID } }
+    }
 
     func revocation(for deviceID: String) -> FloatcutSyncRevocation? {
         revocationStore.read().first { $0.peerDeviceID == deviceID }
     }
 
     func pendingPairing(peerDeviceID: String) -> FloatcutSyncPendingPairing? {
-        pendingStore.read().first { $0.peerDeviceID == peerDeviceID && $0.expiresAtMS > Self.nowMS }
+        pendingStore.read().first {
+            $0.peerDeviceID == peerDeviceID && $0.isValidSameBoot() &&
+            ($0.trustGeneration ?? 0) > (revocation(for: peerDeviceID)?.trustGeneration ?? 0)
+        }
     }
 
     func savePending(_ pending: FloatcutSyncPendingPairing) throws {
@@ -422,9 +602,12 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
     }
 
     func completePairing(peer: FloatcutSyncPeer, requestID: String) throws {
-        guard pendingStore.read().contains(where: { $0.requestID == requestID && $0.peerDeviceID == peer.deviceID }) else {
+        guard let pending = pendingPairing(peerDeviceID: peer.deviceID), pending.requestID == requestID,
+              pending.localConfirmed, pending.remoteConfirmed,
+              pending.trustGeneration == peer.trustGeneration else {
             throw FloatcutSyncProtocolError.invalidState
         }
+        try persistTrustGeneration(deviceID: peer.deviceID, generation: peer.trustGeneration)
         try peerStore.mutate { records in
             guard records.contains(where: { $0.deviceID == peer.deviceID }) || records.count < FloatcutSyncProtocol.maximumPeers else {
                 throw FloatcutSyncProtocolError.invalidState
@@ -439,15 +622,17 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         engine?.refreshAdvertisement()
     }
 
-    func acceptRemoteRevocation(_ revocation: FloatcutSyncRevocation) {
-        try? peerStore.mutate { $0.removeAll { $0.deviceID == revocation.peerDeviceID } }
-        try? pendingStore.mutate { $0.removeAll { $0.peerDeviceID == revocation.peerDeviceID } }
+    func acceptRemoteRevocation(_ revocation: FloatcutSyncRevocation) throws {
         var remote = revocation
         remote.acknowledged = true
-        try? revocationStore.mutate { records in
+        remote.trustGeneration = nextTrustGeneration(for: revocation.peerDeviceID)
+        try revocationStore.mutate { records in
             records.removeAll { $0.peerDeviceID == revocation.peerDeviceID }
             records.append(remote)
         }
+        try persistTrustGeneration(deviceID: remote.peerDeviceID, generation: remote.trustGeneration)
+        try peerStore.mutate { $0.removeAll { $0.deviceID == remote.peerDeviceID } }
+        try pendingStore.mutate { $0.removeAll { $0.peerDeviceID == remote.peerDeviceID } }
         refreshStores()
         engine?.refreshAdvertisement()
         engine?.peerAuthorizationChanged(deviceID: revocation.peerDeviceID)
@@ -472,6 +657,9 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     func confirmIncomingPairing(peerName: String, completion: @escaping (Bool) -> Void) {
         recordDiagnostic("pair_request_received")
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if let decision = testHooks?.approvePairing { decision(peerName, completion); return }
+#endif
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = NSLocalizedString("Pair clipboard device?", comment: "")
@@ -484,6 +672,9 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
 
     func confirmComparisonCode(_ code: String, peerName: String, completion: @escaping (Bool) -> Void) {
         recordDiagnostic("pair_code_presented")
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if let decision = testHooks?.confirmCode { decision(code, peerName, completion); return }
+#endif
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = String(format: NSLocalizedString("Verification code: %@", comment: ""), code)
@@ -508,11 +699,19 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         DispatchQueue.main.async {
             self.pairedPeers = peers
             self.revocations = revocations
+            if self.engine == nil { self.refreshDisabledFileTargets() }
+        }
+    }
+
+    private func refreshDisabledFileTargets() {
+        fileClientTargets = peerStore.read().map { peer in
+            FloatcutFileClientTarget(id: peer.deviceID, name: peer.name, platform: peer.platform,
+                isAvailable: false, unavailableReason: peer.enabled ? "sync_disabled" : "disabled", context: nil)
         }
     }
 
     private func purgeExpiredPendingPairings() {
-        try? pendingStore.mutate { records in records.removeAll { $0.expiresAtMS <= Self.nowMS } }
+        try? pendingStore.mutate { records in records.removeAll { !$0.isValidSameBoot() } }
     }
 
     private func repairCompletedPendingPairings() {
@@ -532,14 +731,17 @@ struct FloatcutDiscoveredPeer: Identifiable, Equatable {
         }
     }
 
-    private func showV2RepairingNoticeIfNeeded() {
-        guard peerStore.read().isEmpty, !legacyPeerStore.read().isEmpty,
-              !UserDefaults.standard.bool(forKey: "floatcutSyncV2RepairingNoticeShown") else { return }
-        UserDefaults.standard.set(true, forKey: "floatcutSyncV2RepairingNoticeShown")
-        statusText = NSLocalizedString("Floatcut Sync now uses protocol v2. Previously paired devices must be confirmed once again. The local sync identity is preserved.", comment: "")
+    private func showV3RepairingNoticeIfNeeded() {
+        guard peerStore.read().isEmpty, (!archivedV2PeerStore.read().isEmpty || !legacyPeerStore.read().isEmpty),
+              !defaults.bool(forKey: "floatcutSyncV3RepairingNoticeShown") else { return }
+        defaults.set(true, forKey: "floatcutSyncV3RepairingNoticeShown")
+        statusText = NSLocalizedString("Floatcut Sync now uses protocol v3. Previously paired devices must be paired again. The local sync identity is preserved.", comment: "")
     }
 
     func recordDiagnostic(_ event: String, _ fields: [String: String] = [:]) {
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if let hooks = testHooks { hooks.onDiagnostic?(event, fields); return }
+#endif
         FloatcutSyncDiagnostics.shared.record(event, fields: fields)
     }
 
@@ -552,7 +754,7 @@ private final class FloatcutSyncEngine {
     private let epoch: UInt64
     private let queue = DispatchQueue(label: "de.meierkarsten.floatcut.sync.network", qos: .utility)
     private let handshakeRegistry = FloatcutTLSHandshakeRegistry()
-    private let clock: FloatcutSyncElapsedClock = FloatcutSyncContinuousClock()
+    private let clock: FloatcutSyncElapsedClock
     private var browser: NWBrowser?
     private var listener: NWListener?
     private var discovered: [String: FloatcutDiscoveredPeer] = [:]
@@ -561,11 +763,14 @@ private final class FloatcutSyncEngine {
     private var preferredEndpointKeys: [String: String] = [:]
     private var connectionsByID: [UUID: FloatcutPeerConnection] = [:]
     private var connectionsByDeviceID: [String: FloatcutPeerConnection] = [:]
+    private var incomingTLSCandidates: [UUID: NWConnection] = [:]
+    private var peerGenerations: [String: UInt64] = [:]
+    private var fileSnapshots: [FloatcutFileTransferSnapshot] = []
+    private var pairingReservations: [String: String] = [:]
     private var outgoingReservations: [String: UUID] = [:]
     private var schedulers: [String: FloatcutSyncPeerScheduler] = [:]
     private var retryTimers: [String: DispatchSourceTimer] = [:]
     private var securitySuspendedDeviceIDs: Set<String> = []
-    private var incomingAttempts: [String: [Date]] = [:]
     private var stopped = false
     private var bonjourGeneration: UInt64 = 0
     private var listenerGeneration: UInt64 = 0
@@ -584,6 +789,84 @@ private final class FloatcutSyncEngine {
 
     fileprivate var epochValue: UInt64 { epoch }
 
+    fileprivate lazy var fileTransfers: FloatcutFileTransferEngine = {
+        let directory = coordinator?.storageDirectory?.appendingPathComponent("FileTransfers-v3", isDirectory: true)
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("de.meierkarsten.floatcut/Sync/FileTransfers-v3", isDirectory: true)
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        let workers = coordinator?.testHooks?.diskWorkers
+#else
+        let workers: OperationQueue? = nil
+#endif
+        return FloatcutFileTransferEngine(
+            queue: queue, localDeviceID: identity.deviceID, localCertificateSHA256: identity.certificateSHA256,
+            epoch: epoch, metadataDirectory: directory, clock: clock,
+            lookupPeer: { [weak self] in self?.fileContext(for: $0) },
+            sendControl: { [weak self] peer, message in
+                guard let self, self.fileContext(for: peer.deviceID) == peer else { return }
+                self.connectionsByDeviceID[peer.deviceID]?.send(message)
+            },
+            connectFile: { [weak self] peer in
+                guard let self, self.fileContext(for: peer.deviceID) == peer,
+                      let target = self.nextCandidate(for: peer.deviceID) else {
+                    throw FloatcutFileFailure.reason("control_lost")
+                }
+                return NWConnection(to: target.endpoint, using: self.makeTLSParameters(channel: "floatcut-file/1",
+                                     expectedFingerprint: peer.certificateSHA256, securityTarget: peer.deviceID))
+            },
+            onSnapshots: { [weak self] snapshots in
+                guard let self else { return }
+                self.fileSnapshots = snapshots
+                self.publishFilePresentation()
+                if self.stopped && self.fileTransfers.canRetire {
+                    self.coordinator?.releaseRetiredEngine(epoch: self.epoch)
+                }
+            }, diskWorkers: workers)
+    }()
+
+    fileprivate func fileContext(for deviceID: String) -> FloatcutFilePeerContext? {
+        guard !stopped, let connection = connectionsByDeviceID[deviceID], connection.isTrusted,
+              let binding = connection.controlBindingSHA256,
+              let peer = coordinator?.pairedPeer(deviceID), peer.enabled, !peer.identityMismatch,
+              peer.certificateSHA256 == connection.peer?.certificateSHA256,
+              coordinator?.revocation(for: deviceID) == nil else { return nil }
+        return FloatcutFilePeerContext(deviceID: deviceID, name: peer.name,
+            certificateSHA256: peer.certificateSHA256, trustGeneration: peer.trustGeneration,
+            peerGeneration: peerGenerations[deviceID, default: 0], controlConnectionID: connection.id,
+            controlBindingSHA256: binding, engineEpoch: epoch,
+            mutualFileCapability: connection.supportsFileTransfers)
+    }
+
+    private func publishFilePresentation() {
+        let targets = (coordinator?.allPairedPeers() ?? []).map { peer -> FloatcutFileClientTarget in
+            let context = fileContext(for: peer.deviceID)
+            let reason: String?
+            if !peer.enabled { reason = "disabled" }
+            else if peer.identityMismatch { reason = "identity_mismatch" }
+            else if context == nil { reason = "offline" }
+            else if context?.mutualFileCapability != true { reason = "unsupported" }
+            else if !fileTransfers.isReady { reason = "busy" }
+            else if fileSnapshots.filter({ $0.direction == .outgoing && !$0.phase.isTerminal }).count >= 4 ||
+                    fileSnapshots.contains(where: { $0.peerDeviceID == peer.deviceID && $0.direction == .outgoing && !$0.phase.isTerminal }) { reason = "busy" }
+            else { reason = nil }
+            return FloatcutFileClientTarget(id: peer.deviceID, name: peer.name, platform: peer.platform,
+                                           isAvailable: reason == nil, unavailableReason: reason, context: context)
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        coordinator?.updateFilePresentation(targets: targets, transfers: fileSnapshots,
+                                             epoch: epoch, revision: nextSnapshotRevision())
+    }
+
+    func beginFileSend(url: URL, peer: FloatcutFilePeerContext) {
+        queue.async { guard self.fileContext(for: peer.deviceID) == peer else { return }; self.fileTransfers.sendFile(url: url, peer: peer) }
+    }
+    func acceptFile(id: String, directory: URL, revision: UInt64, expectedEpoch: UInt64) {
+        queue.async { guard self.epoch == expectedEpoch else { return }; self.fileTransfers.accept(id: id, directory: directory, revision: revision) }
+    }
+    func rejectFile(id: String, revision: UInt64, expectedEpoch: UInt64) { queue.async { guard self.epoch == expectedEpoch else { return }; self.fileTransfers.reject(id: id, revision: revision) } }
+    func cancelFile(id: String, revision: UInt64, expectedEpoch: UInt64) { queue.async { guard self.epoch == expectedEpoch else { return }; self.fileTransfers.cancel(id: id, revision: revision) } }
+    func refreshFileStatus(id: String) { queue.async { self.fileTransfers.refreshStatus(id: id) } }
+    func incomingFilesPreferenceChanged(_ allowed: Bool) { queue.async { self.fileTransfers.allowsReceiving = allowed } }
+
     private enum FloatcutSyncComponentHealth {
         case starting
         case ready
@@ -591,10 +874,12 @@ private final class FloatcutSyncEngine {
         case failed(String)
     }
 
-    init(identity: FloatcutSyncIdentity, coordinator: FloatcutSyncCoordinator, epoch: UInt64) {
+    init(identity: FloatcutSyncIdentity, coordinator: FloatcutSyncCoordinator, epoch: UInt64,
+         clock: FloatcutSyncElapsedClock = FloatcutSyncContinuousClock()) {
         self.identity = identity
         self.coordinator = coordinator
         self.epoch = epoch
+        self.clock = clock
     }
 
     private func nextSnapshotRevision() -> UInt64 {
@@ -627,6 +912,16 @@ private final class FloatcutSyncEngine {
     func start() {
         queue.async { [self] in
             self.stopped = false
+            self.fileTransfers.allowsReceiving = self.coordinator?.allowsIncomingFileTransfers ?? true
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+            if self.coordinator?.testHooks != nil {
+                self.listenerGeneration &+= 1
+                self.browserHealth = .ready
+                do { try self.startListener(generation: self.listenerGeneration) }
+                catch { self.reportNetworkMessage(error.localizedDescription) }
+                return
+            }
+#endif
             if self.wakeObserver == nil {
                 self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
                     forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
@@ -636,6 +931,7 @@ private final class FloatcutSyncEngine {
                         for connection in self.connectionsByID.values {
                             connection.reconcileLivenessAfterWake()
                         }
+                        self.fileTransfers.reconcileDeadlines()
                     }
                 }
             }
@@ -705,6 +1001,9 @@ private final class FloatcutSyncEngine {
 
     private func stopLocked() {
         stopped = true
+        fileTransfers.shutdown()
+        incomingTLSCandidates.values.forEach { $0.cancel() }
+        incomingTLSCandidates.removeAll()
         interfaceRecoveryWorkItem?.cancel()
         interfaceRecoveryWorkItem = nil
         interfaceMonitors.forEach { $0.cancel() }
@@ -735,6 +1034,9 @@ private final class FloatcutSyncEngine {
     func refreshAdvertisement() {
         queue.async {
             guard !self.stopped else { return }
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+            if self.coordinator?.testHooks != nil { return }
+#endif
             self.listener?.service = self.makeService()
         }
     }
@@ -757,23 +1059,32 @@ private final class FloatcutSyncEngine {
         }
     }
 
-    func peerActivationChanged(deviceID: String) {
-        queue.async {
-            if self.coordinator?.pairedPeer(deviceID)?.enabled != true {
-                self.connectionsByDeviceID[deviceID]?.cancel()
-                self.cancelRetry(deviceID: deviceID)
-                self.publishOnline()
-            } else if let peer = self.discovered[deviceID] {
-                self.scheduleEligibleAttempt(for: peer)
-            }
-        }
+    // Called inside the authority transaction that persisted the preference.
+    // Re-enqueueing here would let disable/enable overtake stale disk work.
+    func peerActivationChanged(deviceID: String, enabled: Bool) {
+        peerGenerations[deviceID, default: 0] &+= 1
+        fileTransfers.invalidatePeer(deviceID, reason: "revoked")
+        if !enabled {
+            connectionsByDeviceID[deviceID]?.cancel()
+            cancelRetry(deviceID: deviceID)
+        } else if let peer = discovered[deviceID] { scheduleEligibleAttempt(for: peer) }
+        publishOnline()
     }
 
     func peerAuthorizationChanged(deviceID: String) {
-        queue.async {
-            self.cancelRetry(deviceID: deviceID)
-            self.publishOnline()
-        }
+        peerGenerations[deviceID, default: 0] &+= 1
+        fileTransfers.invalidatePeer(deviceID, reason: "revoked")
+        pairingReservations.removeValue(forKey: deviceID)
+        connectionsByDeviceID[deviceID]?.invalidatePairingAuthority()
+        cancelRetry(deviceID: deviceID)
+        publishOnline()
+    }
+
+    fileprivate func controlAuthorityEnded(_ connection: FloatcutPeerConnection) {
+        guard let id = connection.peerDeviceID, connectionsByDeviceID[id] === connection else { return }
+        peerGenerations[id, default: 0] &+= 1
+        fileTransfers.invalidatePeer(id, reason: "control_lost")
+        publishOnline()
     }
 
     func sendLocalText(_ text: String) {
@@ -867,9 +1178,18 @@ private final class FloatcutSyncEngine {
     }
 
     private func startListener(generation: UInt64) throws {
-        let parameters = makeTLSParameters()
+        let parameters = makeTLSParameters(channel: nil)
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if coordinator?.testHooks != nil {
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        }
+#endif
         let listener = try NWListener(using: parameters, on: .any)
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        if coordinator?.testHooks == nil { listener.service = makeService() }
+#else
         listener.service = makeService()
+#endif
         listener.stateUpdateHandler = { [weak self] state in
             guard let self, !self.stopped, self.listenerGeneration == generation else { return }
             switch state {
@@ -892,8 +1212,7 @@ private final class FloatcutSyncEngine {
                     connection.cancel()
                     return
                 }
-                guard self.allowIncoming(connection.endpoint) else { connection.cancel(); return }
-                self.adopt(connection, direction: .incoming)
+                self.routeIncoming(connection)
             }
         }
         self.listener = listener
@@ -1046,7 +1365,7 @@ private final class FloatcutSyncEngine {
                   let caps = values["caps"]?.split(separator: ",").map(String.init),
                   let pair = values["pair"], pair == "0" || pair == "1",
                   pv == FloatcutSyncProtocol.version,
-                  caps == FloatcutSyncProtocol.capabilities
+                  FloatcutSyncProtocol.areValidCapabilities(caps)
             else { continue }
             // A single DNS-SD result may be visible on several interfaces.
             // Give each route its own scoped service endpoint so a failed route
@@ -1183,7 +1502,7 @@ private final class FloatcutSyncEngine {
     }
 
     private func adopt(_ nwConnection: NWConnection, direction: FloatcutConnectionDirection,
-                       attempt: FloatcutSyncAttempt? = nil) {
+                       attempt: FloatcutSyncAttempt? = nil, alreadyStarted: Bool = false, candidateStartedAt: TimeInterval? = nil) {
         if direction == .incoming,
            connectionsByID.values.filter({ $0.isIncomingPreHello }).count >= 32 {
             coordinator?.recordDiagnostic("incoming_prehello_limit_reached")
@@ -1199,11 +1518,49 @@ private final class FloatcutSyncEngine {
             coordinator: coordinator,
             queue: queue,
             clock: clock,
-            attempt: attempt
+            attempt: attempt, candidateStartedAt: candidateStartedAt
         )
         connectionsByID[connection.id] = connection
-        connection.start()
+        connection.start(alreadyStarted: alreadyStarted)
     }
+
+    private func routeIncoming(_ connection: NWConnection) {
+        let count = incomingTLSCandidates.count + connectionsByID.values.filter { $0.isIncomingPreHello }.count + fileTransfers.preOpenCandidateCount
+        guard count < 32 else { connection.cancel(); return }
+        let candidateID = UUID()
+        let startedAt = clock.now()
+        incomingTLSCandidates[candidateID] = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection, self.incomingTLSCandidates[candidateID] === connection else { return }
+            switch state {
+            case .ready:
+                self.incomingTLSCandidates.removeValue(forKey: candidateID)
+                guard !self.stopped, self.clock.now() < startedAt + 15 else { connection.cancel(); return }
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+                self.coordinator?.testHooks?.beforeIncomingAdoption?()
+#endif
+                switch negotiatedProtocol(connection) {
+                case "floatcut-sync/3": self.adopt(connection, direction: .incoming, alreadyStarted: true, candidateStartedAt: startedAt)
+                case "floatcut-file/1":
+                    guard let tls = authenticatedTLSContext(connection), let peer = self.fileContext(for: tls.deviceID),
+                          peer.certificateSHA256 == tls.certificateSHA256 else { connection.cancel(); return }
+                    self.fileTransfers.acceptIncoming(connection, peer: peer, candidateStartedAt: startedAt)
+                default: connection.cancel()
+                }
+            case .failed, .cancelled:
+                self.incomingTLSCandidates.removeValue(forKey: candidateID)
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 15) { [weak self, weak connection] in
+            guard let self, let connection, self.incomingTLSCandidates[candidateID] === connection else { return }
+            self.incomingTLSCandidates.removeValue(forKey: candidateID)
+            connection.cancel()
+        }
+    }
+
+    func performAuthorization(_ action: @escaping () -> Void) { queue.async { guard !self.stopped else { return }; action() } }
 
     fileprivate func didIdentify(_ connection: FloatcutPeerConnection, deviceID: String) -> Bool {
         guard connection.engineEpoch == epoch,
@@ -1213,7 +1570,7 @@ private final class FloatcutSyncEngine {
             return false
         }
         if let incumbent = connectionsByDeviceID[deviceID], incumbent !== connection {
-            if incumbent.isClosingOrEnded || incumbent.isPastReceiveDeadline {
+            if incumbent.isClosingOrEnded || incumbent.isPastReceiveDeadline || incumbent.hasRetiredControlAuthority {
                 incumbent.cancel()
                 connectionsByDeviceID.removeValue(forKey: deviceID)
             } else {
@@ -1245,12 +1602,20 @@ private final class FloatcutSyncEngine {
         publishOnline()
     }
 
-    fileprivate func newPairingRejectionReason(_ connection: FloatcutPeerConnection) -> String? {
-        FloatcutSyncPairingPolicy.rejectionReason(
-            allowsNewPairings: coordinator?.allowsNewPairingRequests ?? true,
-            pairedPeerCount: coordinator?.pairedPeerCount() ?? 0,
-            concurrentPairingCount: connectionsByID.values.filter { $0 !== connection && $0.isPairing }.count
-        )
+    fileprivate func reservePairing(_ connection: FloatcutPeerConnection, requestID: String) -> String? {
+        guard let deviceID = connection.peerDeviceID else { return "invalid_request" }
+        if coordinator?.pairedPeer(deviceID) != nil { return "already_paired" }
+        if coordinator?.allowsNewPairingRequests != true { return "pairing_disabled" }
+        let pending = coordinator?.activePendingPairings() ?? []
+        let reservedDevices = Set(pairingReservations.keys).union(pending.map(\.peerDeviceID))
+        if (coordinator?.pairedPeerCount() ?? 0) + reservedDevices.count >= FloatcutSyncProtocol.maximumPeers { return "peer_limit" }
+        if reservedDevices.contains(deviceID) || reservedDevices.count >= 3 { return "pairing_busy" }
+        pairingReservations[deviceID] = requestID
+        return nil
+    }
+
+    fileprivate func releasePairing(deviceID: String, requestID: String) {
+        if pairingReservations[deviceID] == requestID { pairingReservations.removeValue(forKey: deviceID) }
     }
 
     fileprivate func connectionEnded(_ connection: FloatcutPeerConnection) {
@@ -1264,18 +1629,14 @@ private final class FloatcutSyncEngine {
         }
         if let deviceID, connectionsByDeviceID[deviceID] === connection {
             connectionsByDeviceID.removeValue(forKey: deviceID)
+            fileTransfers.invalidatePeer(deviceID, reason: "control_lost")
+            if let requestID = connection.activePairingRequestID { pairingReservations.removeValue(forKey: deviceID); connection.retainOrInvalidatePairingOnDisconnect(requestID) }
         }
         if let deviceID,
            connection.purpose?.automaticallyRetries == true ||
             coordinator?.revocation(for: deviceID)?.acknowledged == false ||
             (connection.purpose == .newPairing && coordinator?.pendingPairing(peerDeviceID: deviceID)?.localIsInitiator == true) {
-            if connection.hasSecurityFailure {
-                securitySuspendedDeviceIDs.insert(deviceID)
-                schedulers[deviceID]?.suspendForSecurity()
-                cancelRetry(deviceID: deviceID)
-            } else {
-                scheduleReconnect(deviceID: deviceID)
-            }
+            scheduleReconnect(deviceID: deviceID)
         }
         publishOnline()
     }
@@ -1306,6 +1667,7 @@ private final class FloatcutSyncEngine {
             return deviceID
         })
         coordinator?.updateOnline(ids, epoch: epoch, revision: nextSnapshotRevision())
+        publishFilePresentation()
     }
 
     private func isDeviceOccupied(_ deviceID: String) -> Bool {
@@ -1335,34 +1697,27 @@ private final class FloatcutSyncEngine {
         else { schedulers[deviceID]?.invalidateTimer() }
     }
 
-    private func allowIncoming(_ endpoint: NWEndpoint) -> Bool {
-        let key: String
-        if case .hostPort(let host, _) = endpoint { key = host.debugDescription }
-        else { key = endpoint.debugDescription }
-        let cutoff = Date().addingTimeInterval(-60)
-        var attempts = (incomingAttempts[key] ?? []).filter { $0 >= cutoff }
-        guard attempts.count < 5 else { return false }
-        attempts.append(Date())
-        incomingAttempts[key] = attempts
-        return true
-    }
-
-    private func makeTLSParameters(expectedFingerprint: String? = nil, securityTarget: String? = nil) -> NWParameters {
+    private func makeTLSParameters(channel: String? = "floatcut-sync/3", expectedFingerprint: String? = nil, securityTarget: String? = nil) -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(options, .TLSv13)
         sec_protocol_options_set_max_tls_protocol_version(options, .TLSv13)
         sec_protocol_options_set_peer_authentication_required(options, true)
+        sec_protocol_options_set_tls_resumption_enabled(options, false)
+        sec_protocol_options_set_tls_tickets_enabled(options, false)
+        sec_protocol_options_set_tls_false_start_enabled(options, false)
+        for protocolName in channel.map({ [$0] }) ?? ["floatcut-sync/3", "floatcut-file/1"] {
+            sec_protocol_options_add_tls_application_protocol(options, protocolName)
+        }
         if let secIdentity = sec_identity_create(identity.identity) {
             sec_protocol_options_set_local_identity(options, secIdentity)
         }
         let registry = handshakeRegistry
         weak var coordinator = coordinator
-        weak var engine = self
         sec_protocol_options_set_verify_block(options, { _, trust, complete in
             let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
             guard let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
-                  let certificate = chain.first,
+                  chain.count == 1, let certificate = chain.first,
                   let deviceID = FloatcutTLSHandshakeRegistry.deviceID(from: certificate),
                   FloatcutSyncCertificateValidator.validate(certificate: certificate, expectedDeviceID: deviceID)
             else {
@@ -1371,17 +1726,12 @@ private final class FloatcutSyncEngine {
             }
             let fingerprint = FloatcutSyncProtocol.sha256Hex(SecCertificateCopyData(certificate) as Data)
             let knownPeer = coordinator?.pairedPeer(deviceID)
-            guard (expectedFingerprint == nil || fingerprint == expectedFingerprint),
+            guard (securityTarget == nil || deviceID == securityTarget),
+                  (expectedFingerprint == nil || fingerprint == expectedFingerprint),
                   (knownPeer == nil || knownPeer?.certificateSHA256 == fingerprint),
                   registry.record(certificate: certificate, deviceID: deviceID)
             else {
-                if let securityTarget {
-                    engine?.securitySuspendedDeviceIDs.insert(securityTarget)
-                    engine?.schedulers[securityTarget]?.suspendForSecurity()
-                }
-                if let knownPeer, let engine {
-                    coordinator?.reportIdentityMismatch(deviceID: deviceID, name: knownPeer.name, epoch: engine.epochValue)
-                }
+                coordinator?.recordDiagnostic("tls_candidate_identity_rejected", ["peer": String((securityTarget ?? deviceID).prefix(8))])
                 complete(false)
                 return
             }
@@ -1427,14 +1777,24 @@ private final class FloatcutSyncDiagnostics {
     let logFileURL: URL
 
     private init() {
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("FloatcutSyncCoordinatorTests-diagnostics-\(ProcessInfo.processInfo.processIdentifier)")
+#else
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("de.meierkarsten.floatcut", isDirectory: true)
             .appendingPathComponent("Sync", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+#endif
         logFileURL = base.appendingPathComponent("diagnostics.log")
     }
 
-    var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+    var isEnabled: Bool {
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        return false
+#else
+        return UserDefaults.standard.bool(forKey: enabledKey)
+#endif
+    }
 
     func setEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: enabledKey)
@@ -1553,14 +1913,16 @@ private final class FloatcutPeerConnection {
     private let direction: FloatcutConnectionDirection
     private let identity: FloatcutSyncIdentity
     private let registry: FloatcutTLSHandshakeRegistry
-    private unowned let engine: FloatcutSyncEngine
+    private let engine: FloatcutSyncEngine
     private weak var coordinator: FloatcutSyncCoordinator?
     private let queue: DispatchQueue
     private let clock: FloatcutSyncElapsedClock
     private let attempt: FloatcutSyncAttempt?
     private let establishmentStartedAt: TimeInterval
-    private var decoder = FloatcutSyncFrameDecoder()
+    private var decoder = FloatcutSyncFrameDecoder(deferFileOfferValidation: true)
     private var state: FloatcutPeerConnectionState = .awaitingHello
+    private var localHelloNonce: Data?
+    private(set) var controlBindingSHA256: String?
     private var didSendHello = false
     private var didReceiveHello = false
     private var ended = false
@@ -1575,6 +1937,8 @@ private final class FloatcutPeerConnection {
     private var peerName = "Device"
     private var peerPlatform = "unknown"
     private var peerCapabilities: [String] = []
+    private var needsResumeClassification = false
+    private var lastPairingStatusSent: String?
     private var pairing: FloatcutPairingSession?
     private var incomingImage: FloatcutIncomingImageFile?
     private var incomingImageToken: FloatcutSyncWorkToken?
@@ -1585,14 +1949,17 @@ private final class FloatcutPeerConnection {
     private var receiveInFlight = false
     private var handlingRead = false
     private var receivedEOF = false
+    private var controlAuthorityRetired = false
     private var outgoingImage: FloatcutOutgoingImageTransfer?
     private let imagePreparation = FloatcutSyncImagePreparation()
     private var imageTimeoutGeneration = 0
     private var incomingImageTimer: DispatchSourceTimer?
     private var revocationACKTimer: DispatchSourceTimer?
 
-    var isTrusted: Bool { state == .trusted }
-    var isPairing: Bool { state == .pairing }
+    var isTrusted: Bool { state == .trusted && !controlAuthorityRetired }
+    var isPairing: Bool { state == .pairing && pairing?.requestID != nil }
+    var activePairingRequestID: String? { pairing?.complete == false ? pairing?.requestID : nil }
+    var supportsFileTransfers: Bool { peerCapabilities.contains("file.transfer.v1") && FloatcutSyncProtocol.capabilities.contains("file.transfer.v1") }
     var directionName: String { direction.diagnosticName }
     var targetDeviceID: String? { attempt?.targetDeviceID }
     var attemptID: UUID? { attempt?.id }
@@ -1601,6 +1968,7 @@ private final class FloatcutPeerConnection {
     var engineEpoch: UInt64 { attempt?.engineEpoch ?? engine.epochValue }
     var isIncomingPreHello: Bool { direction == .incoming && !didReceiveHello && !ended }
     var isClosingOrEnded: Bool { ended || state == .closing }
+    var hasRetiredControlAuthority: Bool { controlAuthorityRetired }
     var isPastReceiveDeadline: Bool { liveness.isExpired(at: clock.now()) }
     private(set) var hasSecurityFailure = false
 
@@ -1613,7 +1981,7 @@ private final class FloatcutPeerConnection {
         coordinator: FloatcutSyncCoordinator?,
         queue: DispatchQueue,
         clock: FloatcutSyncElapsedClock,
-        attempt: FloatcutSyncAttempt?
+        attempt: FloatcutSyncAttempt?, candidateStartedAt: TimeInterval? = nil
     ) {
         self.connection = connection
         self.direction = direction
@@ -1624,23 +1992,24 @@ private final class FloatcutPeerConnection {
         self.queue = queue
         self.clock = clock
         self.attempt = attempt
-        establishmentStartedAt = clock.now()
+        establishmentStartedAt = attempt?.startedAt ?? candidateStartedAt ?? clock.now()
         liveness = FloatcutSyncLiveness(now: establishmentStartedAt)
     }
 
     func markSecurityFailure() { hasSecurityFailure = true }
 
-    func start() {
+    func start(alreadyStarted: Bool = false) {
         clipboardInbox.didProgress = { [weak self] in
             guard let self else { return }
             if self.clipboardInbox.canReceive { self.clearReceivePause() }
             self.receiveNext()
         }
         connection.stateUpdateHandler = { [weak self] state in self?.handleConnectionState(state) }
-        connection.start(queue: queue)
+        if alreadyStarted { handleConnectionState(.ready) }
+        else { connection.start(queue: queue) }
         let expectedAttemptID = attempt?.id
-        queue.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self, !self.ended, self.state == .awaitingHello,
+        queue.asyncAfter(deadline: .now() + max(0, establishmentStartedAt + 15 - clock.now())) { [weak self] in
+            guard let self, !self.ended, self.state == .awaitingHello || self.needsResumeClassification,
                   self.attempt?.id == expectedAttemptID || expectedAttemptID == nil else { return }
             self.coordinator?.recordDiagnostic(
                 "connection_establishment_timed_out",
@@ -1673,6 +2042,9 @@ private final class FloatcutPeerConnection {
 
     func send(_ message: FloatcutSyncWireMessage, completion: (() -> Void)? = nil) {
         guard state != .closing else { return }
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        coordinator?.testHooks?.onWireEvent?("send", message.type)
+#endif
         if (message.type == "CLIPBOARD_UPDATE" || message.type.hasPrefix("CLIPBOARD_IMAGE_")), state != .trusted { return }
         do {
             let started = FloatcutSyncDiagnostics.shared.startMeasurement()
@@ -1751,10 +2123,15 @@ private final class FloatcutPeerConnection {
     }
 
     private func handleConnectionState(_ nwState: NWConnection.State) {
+        // Cancellation is the cleanup acknowledgment, including when our own
+        // cancel() already moved the connection to closing. It must not be
+        // filtered with late ready/waiting callbacks.
+        if case .cancelled = nwState { finish(); return }
+        guard !ended, state != .closing else { return }
         switch nwState {
         case .ready:
             coordinator?.recordDiagnostic("connection_ready", ["direction": direction.diagnosticName])
-            guard captureTLSContext() else { cancel(); return }
+            guard negotiatedProtocol(connection) == "floatcut-sync/3", captureTLSContext() else { cancel(); return }
             liveness = FloatcutSyncLiveness(now: clock.now())
             sendHello()
             receiveNext()
@@ -1774,29 +2151,18 @@ private final class FloatcutPeerConnection {
     }
 
     private func captureTLSContext() -> Bool {
-        guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return false }
-        let raw = sec_protocol_metadata_copy_peer_public_key(metadata.securityProtocolMetadata)
-        let publicData: Data?
-        if let raw {
-            var result = Data()
-            (raw as DispatchData).enumerateBytes { buffer, _, _ in
-                result.append(contentsOf: buffer)
-            }
-            publicData = result
-        } else {
-            publicData = nil
-        }
-        // HELLO supplies the fingerprint. Exact public-key association is completed there.
-        tlsContext = nil
-        pairing?.tlsPublicKeyData = publicData
-        if pairing == nil { pairing = FloatcutPairingSession(tlsPublicKeyData: publicData) }
+        guard let context = authenticatedTLSContext(connection),
+              targetDeviceID == nil || context.deviceID == targetDeviceID else { return false }
+        tlsContext = context
+        pairing = FloatcutPairingSession(tlsPublicKeyData: context.publicKeyData)
         return true
     }
 
     private func sendHello() {
         guard !didSendHello else { return }
         didSendHello = true
-        let nonce = (try? FloatcutSyncProtocol.secureNonce()) ?? Data(repeating: 0, count: 32)
+        guard let nonce = try? FloatcutSyncProtocol.secureNonce() else { cancel(); return }
+        localHelloNonce = nonce
         send(FloatcutSyncWireMessage(type: "HELLO", fields: [
             "device_id": identity.deviceID,
             "device_name": coordinator?.deviceName ?? "Floatcut",
@@ -1818,7 +2184,12 @@ private final class FloatcutPeerConnection {
             return
         }
         receiveInFlight = true
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, transportComplete, error in
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+            var complete = transportComplete
+#else
+            let complete = transportComplete
+#endif
             guard let self, !self.ended, self.state != .closing else { return }
             self.receiveInFlight = false
             self.handlingRead = true
@@ -1826,14 +2197,26 @@ private final class FloatcutPeerConnection {
             self.receivedEOF = complete
             if error != nil { self.cancel(); return }
             if let data, !data.isEmpty {
-                self.liveness.received(at: self.clock.now())
-                self.scheduleLivenessDeadline()
                 do {
                     let started = FloatcutSyncDiagnostics.shared.startMeasurement()
                     let messages = try self.decoder.append(data)
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+                    // Network.framework TLS half-close coalescing varies. The
+                    // regression test controls only this transport EOF marker;
+                    // real decoded traffic and all authority/publication logic
+                    // below remain the production implementation.
+                    if self.coordinator?.testHooks?.endControlAfterNextClipboard == true,
+                       messages.contains(where: { $0.type == "CLIPBOARD_UPDATE" }) {
+                        self.coordinator?.testHooks?.endControlAfterNextClipboard = false
+                        complete = true
+                        self.receivedEOF = true
+                    }
+#endif
                     FloatcutSyncDiagnostics.shared.recordElapsed("wire_decode", since: started,
                         fields: ["bytes": String(data.count), "messages": String(messages.count)])
                     for message in messages {
+                        self.liveness.received(at: self.clock.now())
+                        self.scheduleLivenessDeadline()
                         if ["CLIPBOARD_UPDATE", "CLIPBOARD_IMAGE_BEGIN", "CLIPBOARD_IMAGE_CHUNK", "CLIPBOARD_IMAGE_COMMIT"].contains(message.type) {
                             self.clipboardInbox.enqueue(bytes: message.payloadByteCount) { [weak self] done in
                                 guard let self, self.lifetimeToken.isActive else { done(); return }
@@ -1865,6 +2248,7 @@ private final class FloatcutPeerConnection {
             if complete {
                 do {
                     try self.decoder.finish()
+                    self.retireControlAuthority()
                 } catch let protocolError as FloatcutSyncProtocolError {
                     self.handleProtocolError(protocolError)
                     return
@@ -1879,7 +2263,17 @@ private final class FloatcutPeerConnection {
         }
     }
 
+    private func retireControlAuthority() {
+        guard !controlAuthorityRetired else { return }
+        controlAuthorityRetired = true
+        lifetimeToken.cancel()
+        engine.controlAuthorityEnded(self)
+    }
+
     private func handle(_ message: FloatcutSyncWireMessage, completion: @escaping () -> Void = {}) throws {
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+        coordinator?.testHooks?.onWireEvent?("receive", message.type)
+#endif
         guard !replay.contains(message.messageID) else { completion(); return }
         replay.insert(message.messageID)
         if !didReceiveHello {
@@ -1888,14 +2282,28 @@ private final class FloatcutPeerConnection {
             completion()
             return
         }
+        if needsResumeClassification {
+            guard clock.now() < establishmentStartedAt + 15, ["PAIR_STATUS", "UNPAIR"].contains(message.type) else { throw FloatcutSyncProtocolError.invalidState }
+        }
         switch message.type {
-        case "HELLO": throw FloatcutSyncProtocolError.invalidState
+        case "HELLO", "FILE_OPEN", "FILE_READY": throw FloatcutSyncProtocolError.invalidState
         case "PAIR_REQUEST": try handlePairRequest(message)
         case "PAIR_CHALLENGE": try handlePairChallenge(message)
+        case "PAIR_REVEAL": try handlePairReveal(message)
         case "PAIR_CONFIRM": try handlePairConfirm(message)
         case "PAIR_STATUS": try handlePairStatus(message)
         case "PAIR_COMPLETE": try handlePairComplete(message)
-        case "PAIR_REJECT": cancel()
+        case "PAIR_REJECT":
+            guard try message.string("request_id") == pairing?.requestID else { throw FloatcutSyncProtocolError.invalidState }
+            invalidatePairingAuthority()
+            cancel()
+        case "FILE_OFFER", "FILE_ACCEPT", "FILE_REJECT", "FILE_CANCEL", "FILE_RESULT", "FILE_STATUS_REQUEST", "FILE_PROGRESS":
+            guard state == .trusted, let context = engine.fileContext(for: peerDeviceID ?? "") else {
+                sendError(code: "not_paired", detail: "", replyTo: message.messageID, close: true)
+                return
+            }
+            if message.type == "FILE_OFFER" { try message.validateFileOfferStructure() }
+            try engine.fileTransfers.handleControl(message, peer: context)
         case "CLIPBOARD_UPDATE":
             try handleClipboard(message, completion: completion)
             return
@@ -1935,277 +2343,263 @@ private final class FloatcutPeerConnection {
     }
 
     private func handleHello(_ message: FloatcutSyncWireMessage) throws {
+        guard clock.now() < establishmentStartedAt + 15 else { throw FloatcutSyncProtocolError.invalidState }
         let deviceID = try message.string("device_id")
         let fingerprint = try message.string("certificate_sha256")
-        guard deviceID != identity.deviceID,
-              let context = registry.context(fingerprint: fingerprint, publicKeyData: pairing?.tlsPublicKeyData),
-              context.deviceID == deviceID
-        else { throw FloatcutSyncProtocolError.invalidField("HELLO identity") }
-        tlsContext = context
+        guard deviceID != identity.deviceID, let context = tlsContext,
+              context.deviceID == deviceID, context.certificateSHA256 == fingerprint,
+              targetDeviceID == nil || targetDeviceID == deviceID,
+              let localNonce = localHelloNonce else { throw FloatcutSyncProtocolError.invalidField("HELLO identity") }
+        let remoteNonce = try FloatcutSyncProtocol.decodeBase64URL(try message.string("session_nonce"), expectedBytes: 32)
+        controlBindingSHA256 = try FloatcutSyncProtocol.controlBinding(
+            dialerDeviceID: direction.isOutgoing ? identity.deviceID : deviceID,
+            dialerCertificateSHA256: direction.isOutgoing ? identity.certificateSHA256 : fingerprint,
+            dialerNonce: direction.isOutgoing ? localNonce : remoteNonce,
+            listenerDeviceID: direction.isOutgoing ? deviceID : identity.deviceID,
+            listenerCertificateSHA256: direction.isOutgoing ? fingerprint : identity.certificateSHA256,
+            listenerNonce: direction.isOutgoing ? remoteNonce : localNonce)
         peerDeviceID = deviceID
         peerName = try message.string("device_name")
         peerPlatform = try message.string("platform")
         peerCapabilities = message.object["capabilities"] as? [String] ?? []
         didReceiveHello = true
         guard engine.didIdentify(self, deviceID: deviceID) else { cancel(); return }
-
-        if let revocation = coordinator?.revocation(for: deviceID), revocation.certificateSHA256 == fingerprint, !revocation.acknowledged {
-            state = .pairing
-            sendUnpair(revocation)
-            return
-        }
-        if let peer = coordinator?.pairedPeer(deviceID) {
-            guard peer.certificateSHA256 == fingerprint else {
-                markSecurityFailure()
-                coordinator?.reportIdentityMismatch(deviceID: deviceID, name: peerName, epoch: engine.epochValue)
-                sendError(code: "identity_mismatch", detail: "Pinned certificate changed", replyTo: message.messageID, close: true)
-                return
-            }
-            guard peer.enabled else { cancel(); return }
-            if let pending = coordinator?.pendingPairing(peerDeviceID: deviceID),
-               pending.peerCertificateSHA256 == fingerprint {
-                self.peer = peer
-                pairing = FloatcutPairingSession(pending: pending, tlsPublicKeyData: pairing?.tlsPublicKeyData)
-                state = .pairing
-                send(FloatcutSyncWireMessage(type: "PAIR_STATUS", fields: [
-                    "request_id": pending.requestID,
-                    "transcript_sha256": pending.transcriptSHA256,
-                    "state": pending.complete ? "complete" : "confirmed",
-                ]))
-                return
-            }
-            let canonical = identity.deviceID < deviceID ? direction.isOutgoing : !direction.isOutgoing
-            guard canonical || direction == .outgoingRevocation else { cancel(); return }
-            self.peer = coordinator?.markPeerSeen(
-                deviceID: peer.deviceID,
-                name: peerName,
-                platform: peerPlatform,
-                capabilities: peerCapabilities
-            ) ?? peer
-            state = .trusted
-            engine.didBecomeTrusted(self)
-            return
-        }
         state = .pairing
-        if let pending = coordinator?.pendingPairing(peerDeviceID: deviceID), pending.peerCertificateSHA256 == fingerprint {
-            pairing = FloatcutPairingSession(pending: pending, tlsPublicKeyData: pairing?.tlsPublicKeyData)
-            send(FloatcutSyncWireMessage(type: "PAIR_STATUS", fields: [
-                "request_id": pending.requestID,
-                "transcript_sha256": pending.transcriptSHA256,
-                "state": pending.complete ? "complete" : "confirmed",
-            ]))
+        if let revoked = coordinator?.revocation(for: deviceID), revoked.certificateSHA256 == fingerprint,
+           !revoked.acknowledged, purpose != .newPairing {
+            sendUnpair(revoked)
+            return
+        }
+        let canonical = identity.deviceID < deviceID ? direction.isOutgoing : !direction.isOutgoing
+        if let currentPeer = coordinator?.pairedPeer(deviceID) {
+            guard currentPeer.certificateSHA256 == fingerprint, currentPeer.trustGeneration > 0 else {
+                markSecurityFailure()
+                sendError(code: "identity_mismatch", detail: "", replyTo: message.messageID, close: true)
+                return
+            }
+            guard currentPeer.enabled else { cancel(); return }
+            peer = currentPeer
+            if purpose != .pairingResume && canonical {
+                peer = coordinator?.markPeerSeen(deviceID: deviceID, name: peerName, platform: peerPlatform,
+                                                  capabilities: peerCapabilities) ?? currentPeer
+                state = .trusted
+                engine.didBecomeTrusted(self)
+                return
+            }
+            needsResumeClassification = !direction.isOutgoing
+        }
+        if let pending = coordinator?.pendingPairing(peerDeviceID: deviceID), pending.peerCertificateSHA256 == fingerprint,
+           (direction.isOutgoing ? pending.localIsInitiator == true : pending.localIsInitiator == false) {
+            pairing = try FloatcutPairingSession(pending: pending, tlsPublicKeyData: context.publicKeyData)
+            if direction.isOutgoing {
+                sendPairingStatus()
+                if !pending.localConfirmed { presentPairingCode() }
+            }
+            armPairingTimeout(requestID: pending.requestID)
         } else if direction == .outgoingPairing {
             try initiatePairing()
         }
     }
 
+    private func makePairing(requestID: String, initiator: Bool) throws -> FloatcutPairingSession {
+        guard let peerDeviceID, let tlsContext, let binding = controlBindingSHA256,
+              let deadline = FloatcutSyncBootDeadline.starting(durationMS: 120_000) else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
+        let exchange = try FloatcutSyncPairingV3(requestID: requestID, localIsInitiator: initiator,
+            originalControlBindingSHA256: binding,
+            initiatorDeviceID: initiator ? identity.deviceID : peerDeviceID,
+            initiatorCertificateSHA256: initiator ? identity.certificateSHA256 : tlsContext.certificateSHA256,
+            acceptorDeviceID: initiator ? peerDeviceID : identity.deviceID,
+            acceptorCertificateSHA256: initiator ? tlsContext.certificateSHA256 : identity.certificateSHA256,
+            deadline: deadline)
+        return FloatcutPairingSession(exchange: exchange, tlsPublicKeyData: tlsContext.publicKeyData,
+                                     trustGeneration: coordinator?.nextTrustGeneration(for: peerDeviceID) ?? 1)
+    }
+
     private func initiatePairing() throws {
-        let nonce = try FloatcutSyncProtocol.secureNonce()
         let requestID = FloatcutSyncProtocol.uuidV4()
-        pairing?.requestID = requestID
-        pairing?.initiatorNonce = nonce
-        pairing?.localIsInitiator = true
+        if let reason = engine.reservePairing(self, requestID: requestID) {
+            sendPairReject(requestID: requestID, reason: reason)
+            return
+        }
+        pairing = try makePairing(requestID: requestID, initiator: true)
+        guard let exchange = pairing?.exchange else { throw FloatcutSyncProtocolError.invalidState }
+        send(try exchange.requestMessage())
         armPairingTimeout(requestID: requestID)
-        send(FloatcutSyncWireMessage(type: "PAIR_REQUEST", fields: [
-            "request_id": requestID,
-            "initiator_nonce": FloatcutSyncProtocol.base64URL(nonce),
-        ]))
     }
 
     private func handlePairRequest(_ message: FloatcutSyncWireMessage) throws {
-        coordinator?.recordDiagnostic("pair_request_received_wire")
-        guard state == .pairing, direction == .incoming,
-              pairing?.requestID == nil
-        else {
-            sendPairReject(message: message, reason: "invalid_request")
-            return
-        }
-        if let reason = engine.newPairingRejectionReason(self) {
-            coordinator?.recordDiagnostic("pair_request_rejected", [
-                "peer": String((peerDeviceID ?? "unknown").prefix(8)),
-                "reason": reason,
-            ])
-            sendPairReject(message: message, reason: reason)
-            return
-        }
         let requestID = try message.string("request_id")
-        let nonce = try FloatcutSyncProtocol.decodeBase64URL(try message.string("initiator_nonce"), expectedBytes: 32)
-        pairing?.requestID = requestID
-        pairing?.initiatorNonce = nonce
-        pairing?.localIsInitiator = false
+        guard direction == .incoming, !needsResumeClassification else { throw FloatcutSyncProtocolError.invalidState }
+        if pairing?.requestID == requestID { throw FloatcutSyncProtocolError.invalidState }
+        if let reason = engine.reservePairing(self, requestID: requestID) {
+            sendPairReject(requestID: requestID, reason: reason)
+            return
+        }
+        guard state == .pairing, pairing?.requestID == nil else {
+            sendPairReject(requestID: requestID, reason: "pairing_busy")
+            return
+        }
+        pairing = try makePairing(requestID: requestID, initiator: false)
+        let commitment = try message.string("initiator_commitment_sha256")
         armPairingTimeout(requestID: requestID)
         coordinator?.confirmIncomingPairing(peerName: peerName) { [weak self] accepted in
             self?.queue.async {
-                guard let self, self.state == .pairing else { return }
+                guard let self, self.pairingIsLive(requestID), let exchange = self.pairing?.exchange else { return }
                 guard accepted else { self.sendPairReject(requestID: requestID, reason: "user_rejected"); return }
-                do {
-                    let acceptorNonce = try FloatcutSyncProtocol.secureNonce()
-                    self.pairing?.acceptorNonce = acceptorNonce
-                    self.send(FloatcutSyncWireMessage(type: "PAIR_CHALLENGE", fields: [
-                        "request_id": requestID,
-                        "acceptor_nonce": FloatcutSyncProtocol.base64URL(acceptorNonce),
-                    ]))
-                    try self.presentPairingCode()
-                } catch { self.sendPairReject(requestID: requestID, reason: "invalid_request") }
+                do { self.send(try exchange.acceptRequest(initiatorCommitment: commitment)) }
+                catch { self.sendPairReject(requestID: requestID, reason: "invalid_request") }
             }
         }
     }
 
-    private func handlePairChallenge(_ message: FloatcutSyncWireMessage) throws {
-        coordinator?.recordDiagnostic("pair_challenge_received")
-        guard state == .pairing, pairing?.localIsInitiator == true,
-              try message.string("request_id") == pairing?.requestID
-        else { throw FloatcutSyncProtocolError.invalidState }
-        pairing?.acceptorNonce = try FloatcutSyncProtocol.decodeBase64URL(try message.string("acceptor_nonce"), expectedBytes: 32)
-        try presentPairingCode()
+    private func pairingIsLive(_ requestID: String) -> Bool {
+        guard !ended, state == .pairing, let exchange = pairing?.exchange, exchange.requestID == requestID,
+              exchange.phase != .invalidated, let peerDeviceID,
+              pairing?.trustGeneration == coordinator?.nextTrustGeneration(for: peerDeviceID) ||
+              pairing?.trustGeneration == coordinator?.pairedPeer(peerDeviceID)?.trustGeneration else { return false }
+        return exchange.deadline.isValid(durationMS: exchange.phase == .complete ? 600_000 : 120_000)
     }
 
-    private func presentPairingCode() throws {
-        guard let context = tlsContext, let session = pairing,
-              let initiatorNonce = session.initiatorNonce,
-              let acceptorNonce = session.acceptorNonce,
-              let requestID = session.requestID,
-              let peerDeviceID
-        else { throw FloatcutSyncProtocolError.invalidState }
-        let localIsInitiator = session.localIsInitiator
-        let transcript = try FloatcutSyncProtocol.pairingTranscript(
-            initiatorDeviceID: localIsInitiator ? identity.deviceID : peerDeviceID,
-            initiatorCertificateSHA256: localIsInitiator ? identity.certificateSHA256 : context.certificateSHA256,
-            initiatorNonce: initiatorNonce,
-            acceptorDeviceID: localIsInitiator ? peerDeviceID : identity.deviceID,
-            acceptorCertificateSHA256: localIsInitiator ? context.certificateSHA256 : identity.certificateSHA256,
-            acceptorNonce: acceptorNonce
-        )
-        pairing?.transcriptSHA256 = transcript.sha256
+    private func handlePairChallenge(_ message: FloatcutSyncWireMessage) throws {
+        guard let exchange = pairing?.exchange, pairingIsLive(exchange.requestID) else { throw FloatcutSyncProtocolError.invalidState }
+        send(try exchange.receiveChallenge(message))
+    }
+
+    private func handlePairReveal(_ message: FloatcutSyncWireMessage) throws {
+        guard let exchange = pairing?.exchange, pairingIsLive(exchange.requestID) else { throw FloatcutSyncProtocolError.invalidState }
+        do {
+            if let reply = try exchange.receiveReveal(message) { send(reply) }
+            try persistPending()
+            presentPairingCode()
+        } catch FloatcutSyncProtocolError.commitmentMismatch {
+            sendPairReject(requestID: exchange.requestID, reason: "commitment_mismatch")
+        }
+    }
+
+    private func presentPairingCode() {
+        guard let exchange = pairing?.exchange, let transcript = exchange.transcript, !exchange.localConfirmed,
+              pairing?.codePromptPresented != true, pairingIsLive(exchange.requestID) else { return }
+        pairing?.codePromptPresented = true
         coordinator?.confirmComparisonCode(transcript.comparisonCode, peerName: peerName) { [weak self] confirmed in
             self?.queue.async {
-                guard let self, self.state == .pairing else { return }
-                guard confirmed else { self.sendPairReject(requestID: requestID, reason: "user_rejected"); return }
+                guard let self, self.pairingIsLive(exchange.requestID), self.pairing?.exchange === exchange else { return }
+                guard confirmed else { self.sendPairReject(requestID: exchange.requestID, reason: "user_rejected"); return }
                 do {
-                    self.pairing?.localConfirmed = true
+                    let confirmation = try exchange.confirmLocal()
                     try self.persistPending()
-                    self.send(FloatcutSyncWireMessage(type: "PAIR_CONFIRM", fields: [
-                        "request_id": requestID,
-                        "transcript_sha256": transcript.sha256,
-                    ]))
+                    self.send(confirmation)
                     try self.completePairingIfReady()
-                } catch { self.sendPairReject(requestID: requestID, reason: "invalid_request") }
+                } catch { self.sendPairReject(requestID: exchange.requestID, reason: "invalid_request") }
             }
         }
     }
 
     private func handlePairConfirm(_ message: FloatcutSyncWireMessage) throws {
-        coordinator?.recordDiagnostic("pair_confirm_received")
-        guard state == .pairing,
-              try message.string("request_id") == pairing?.requestID,
-              try message.string("transcript_sha256") == pairing?.transcriptSHA256
-        else { throw FloatcutSyncProtocolError.invalidState }
-        pairing?.remoteConfirmed = true
-        try persistPending()
-        try completePairingIfReady()
+        guard let exchange = pairing?.exchange,
+              state == .trusted && exchange.phase == .complete || pairingIsLive(exchange.requestID) else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
+        try exchange.receiveConfirmation(message)
+        if exchange.phase != .complete { try persistPending(); try completePairingIfReady() }
+    }
+
+    private func sendPairingStatus() {
+        guard let exchange = pairing?.exchange, let transcript = exchange.transcript else { return }
+        let status = exchange.phase == .complete ? "complete" : exchange.localConfirmed ? "confirmed" : "awaiting_confirmation"
+        guard lastPairingStatusSent != status else { return }
+        lastPairingStatusSent = status
+        send(FloatcutSyncWireMessage(type: "PAIR_STATUS", fields: ["request_id": exchange.requestID,
+            "transcript_sha256": transcript.sha256,
+            "state": status]))
     }
 
     private func handlePairStatus(_ message: FloatcutSyncWireMessage) throws {
-        coordinator?.recordDiagnostic("pair_status_received")
-        guard state == .pairing, let pending = coordinator?.pendingPairing(peerDeviceID: peerDeviceID ?? ""),
-              try message.string("request_id") == pending.requestID,
-              try message.string("transcript_sha256") == pending.transcriptSHA256
-        else { throw FloatcutSyncProtocolError.invalidState }
-        pairing = FloatcutPairingSession(pending: pending, tlsPublicKeyData: pairing?.tlsPublicKeyData)
-        if try message.string("state") == "complete" {
-            pairing?.remoteConfirmed = true
-            try persistPending()
-            try completePairingIfReady()
+        if pairing?.exchange == nil, let peerDeviceID, let pending = coordinator?.pendingPairing(peerDeviceID: peerDeviceID),
+           pending.requestID == (try message.string("request_id")),
+           pending.peerCertificateSHA256 == tlsContext?.certificateSHA256 {
+            pairing = try FloatcutPairingSession(pending: pending, tlsPublicKeyData: tlsContext?.publicKeyData)
+            state = .pairing
+        }
+        guard let exchange = pairing?.exchange, pairingIsLive(exchange.requestID) || state == .trusted && exchange.phase == .complete else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
+        try exchange.receiveConfirmation(message)
+        needsResumeClassification = false
+        sendPairingStatus()
+        if exchange.phase == .complete {
+            guard let peerDeviceID, let currentPeer = coordinator?.pairedPeer(peerDeviceID),
+                  currentPeer.trustGeneration == pairing?.trustGeneration else { throw FloatcutSyncProtocolError.invalidState }
+            peer = currentPeer
+            state = .trusted
+            engine.didBecomeTrusted(self)
         } else {
-            pairing?.remoteConfirmed = true
-            send(FloatcutSyncWireMessage(type: "PAIR_CONFIRM", fields: [
-                "request_id": pending.requestID,
-                "transcript_sha256": pending.transcriptSHA256,
-            ]))
+            try persistPending()
+            if !exchange.localConfirmed { presentPairingCode() }
             try completePairingIfReady()
         }
     }
 
     private func handlePairComplete(_ message: FloatcutSyncWireMessage) throws {
-        coordinator?.recordDiagnostic("pair_complete_received")
-        let requestID = try message.string("request_id")
-        let transcript = try message.string("transcript_sha256")
-
-        // Both peers may complete at almost the same time. If our own
-        // PAIR_CONFIRM already promoted the connection to Trusted, accept the
-        // matching peer completion as an idempotent acknowledgement instead of
-        // closing a successfully paired connection with invalid_state.
-        if state == .trusted,
-           requestID == pairing?.requestID,
-           transcript == pairing?.transcriptSHA256 {
-            return
-        }
-
-        guard state == .pairing,
-              requestID == pairing?.requestID,
-              transcript == pairing?.transcriptSHA256
-        else { throw FloatcutSyncProtocolError.invalidState }
-        pairing?.remoteConfirmed = true
-        try persistPending()
-        try completePairingIfReady(sendComplete: false)
+        guard let exchange = pairing?.exchange,
+              state == .trusted && exchange.phase == .complete || pairingIsLive(exchange.requestID) else { throw FloatcutSyncProtocolError.invalidState }
+        try exchange.receiveConfirmation(message)
+        if exchange.phase != .complete { try completePairingIfReady(sendComplete: false) }
     }
 
     private func persistPending() throws {
-        guard let session = pairing, let context = tlsContext, let peerDeviceID,
-              let requestID = session.requestID, let transcript = session.transcriptSHA256
-        else { throw FloatcutSyncProtocolError.invalidState }
-        // Retries and duplicate completion frames must retain the original
-        // pending-record deadline. Only a genuinely new transcript gets its
-        // ten-minute retention window.
-        let existing = coordinator?.pendingPairing(peerDeviceID: peerDeviceID)
-        let expiresAtMS = existing?.requestID == requestID && existing?.transcriptSHA256 == transcript
-            ? existing!.expiresAtMS : FloatcutSyncCoordinator.nowMS + 600_000
+        guard let session = pairing, let exchange = session.exchange, let transcript = exchange.transcript,
+              let context = tlsContext, let peerDeviceID,
+              exchange.deadline.isValid(durationMS: exchange.phase == .complete ? 600_000 : 120_000) else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
         try coordinator?.savePending(FloatcutSyncPendingPairing(
-            requestID: requestID,
-            peerDeviceID: peerDeviceID,
-            peerCertificateSHA256: context.certificateSHA256,
-            peerCertificateDERBase64: context.certificateDER.base64EncodedString(),
-            transcriptSHA256: transcript,
-            expiresAtMS: expiresAtMS,
-            localIsInitiator: session.localIsInitiator,
-            localConfirmed: session.localConfirmed,
-            remoteConfirmed: session.remoteConfirmed,
-            complete: session.localConfirmed && session.remoteConfirmed
-        ))
+            requestID: exchange.requestID, peerDeviceID: peerDeviceID, peerCertificateSHA256: context.certificateSHA256,
+            peerCertificateDERBase64: context.certificateDER.base64EncodedString(), transcriptSHA256: transcript.sha256,
+            expiresAtMS: 0, localIsInitiator: exchange.localIsInitiator, localConfirmed: exchange.localConfirmed,
+            remoteConfirmed: exchange.remoteConfirmed, complete: exchange.phase == .complete,
+            bootDeadline: exchange.deadline, originalControlBindingSHA256: exchange.originalControlBindingSHA256,
+            initiatorDeviceID: exchange.initiatorDeviceID, initiatorCertificateSHA256: exchange.initiatorCertificateSHA256,
+            acceptorDeviceID: exchange.acceptorDeviceID, acceptorCertificateSHA256: exchange.acceptorCertificateSHA256,
+            initiatorCommitmentSHA256: exchange.initiatorCommitmentSHA256,
+            acceptorCommitmentSHA256: exchange.acceptorCommitmentSHA256, trustGeneration: session.trustGeneration))
     }
 
     private func completePairingIfReady(sendComplete: Bool = true) throws {
-        guard let session = pairing, session.localConfirmed, session.remoteConfirmed,
-              let requestID = session.requestID, let transcript = session.transcriptSHA256,
-              let context = tlsContext, let peerDeviceID
-        else { return }
-        // Persist the terminal flags before the peer record. Reconnect must
-        // never observe a trusted peer alongside an incomplete pending record.
+        guard let exchange = pairing?.exchange, exchange.localConfirmed, exchange.remoteConfirmed,
+              let transcript = exchange.transcript, let context = tlsContext, let peerDeviceID,
+              let generation = pairing?.trustGeneration else { return }
+        guard pairingIsLive(exchange.requestID) else { throw FloatcutSyncProtocolError.invalidState }
         try persistPending()
-        let peer = FloatcutSyncPeer(
-            deviceID: peerDeviceID,
-            name: peerName,
-            platform: peerPlatform,
-            certificateSHA256: context.certificateSHA256,
-            certificateDERBase64: context.certificateDER.base64EncodedString(),
-            pairedAtMS: FloatcutSyncCoordinator.nowMS,
-            lastSeenMS: FloatcutSyncCoordinator.nowMS,
-            capabilities: peerCapabilities,
-            enabled: true,
-            identityMismatch: false,
-            allowsOutgoingImages: false
-        )
-        try coordinator?.completePairing(peer: peer, requestID: requestID)
-        self.peer = peer
-        pairing?.complete = true
+        let newPeer = FloatcutSyncPeer(deviceID: peerDeviceID, name: peerName, platform: peerPlatform,
+            certificateSHA256: context.certificateSHA256, certificateDERBase64: context.certificateDER.base64EncodedString(),
+            pairedAtMS: FloatcutSyncCoordinator.nowMS, lastSeenMS: FloatcutSyncCoordinator.nowMS,
+            capabilities: peerCapabilities, enabled: true, identityMismatch: false, allowsOutgoingImages: false,
+            trustGeneration: generation)
+        try coordinator?.completePairing(peer: newPeer, requestID: exchange.requestID)
+        try exchange.markCompleted()
+        try persistPending()
+        self.peer = newPeer
         state = .trusted
-        if sendComplete {
-            send(FloatcutSyncWireMessage(type: "PAIR_COMPLETE", fields: [
-                "request_id": requestID,
-                "transcript_sha256": transcript,
-            ]))
-        }
+        engine.releasePairing(deviceID: peerDeviceID, requestID: exchange.requestID)
+        if sendComplete { send(FloatcutSyncWireMessage(type: "PAIR_COMPLETE", fields: ["request_id": exchange.requestID, "transcript_sha256": transcript.sha256])) }
         engine.didBecomeTrusted(self)
+    }
+
+    func invalidatePairingAuthority() {
+        if let requestID = pairing?.requestID { coordinator?.invalidatePairing(requestID: requestID) }
+        pairing?.exchange?.invalidate()
+        lifetimeToken.cancel()
+        cancelOutgoingImage()
+        cleanupIncomingImage(event: "v3_image_receive_cleanup")
+    }
+
+    func retainOrInvalidatePairingOnDisconnect(_ requestID: String) {
+        if pairing?.exchange?.transcript == nil {
+            coordinator?.invalidatePairing(requestID: requestID)
+            pairing?.exchange?.invalidate()
+        }
     }
 
     private func handleClipboard(_ message: FloatcutSyncWireMessage, completion: @escaping () -> Void) throws {
@@ -2449,6 +2843,17 @@ private final class FloatcutPeerConnection {
     private func handleUnpair(_ message: FloatcutSyncWireMessage) throws {
         guard let peerDeviceID, let context = tlsContext else { throw FloatcutSyncProtocolError.invalidState }
         let revocationID = try message.string("revocation_id")
+        if coordinator?.pairedPeer(peerDeviceID) == nil {
+            guard let historic = coordinator?.revocation(for: peerDeviceID),
+                  historic.certificateSHA256 == context.certificateSHA256,
+                  historic.revocationID == revocationID else { throw FloatcutSyncProtocolError.invalidState }
+            send(FloatcutSyncWireMessage(type: "UNPAIR_ACK", fields: ["revocation_id": revocationID]))
+            queue.asyncAfter(deadline: .now() + 0.2) { self.cancel() }
+            return
+        }
+        guard coordinator?.pairedPeer(peerDeviceID)?.certificateSHA256 == context.certificateSHA256 else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
         let revocation = FloatcutSyncRevocation(
             peerDeviceID: peerDeviceID,
             certificateSHA256: context.certificateSHA256,
@@ -2459,7 +2864,7 @@ private final class FloatcutPeerConnection {
         lifetimeToken.cancel()
         clipboardInbox.discard()
         cleanupIncomingImage(event: "v2_image_receive_cleanup")
-        coordinator?.acceptRemoteRevocation(revocation)
+        try coordinator?.acceptRemoteRevocation(revocation)
         send(FloatcutSyncWireMessage(type: "UNPAIR_ACK", fields: ["revocation_id": revocationID]))
         queue.asyncAfter(deadline: .now() + 0.2) { self.cancel() }
     }
@@ -2474,12 +2879,17 @@ private final class FloatcutPeerConnection {
     }
 
     private func sendPairReject(requestID: String, reason: String) {
+        coordinator?.invalidatePairing(requestID: requestID)
+        if let deviceID = peerDeviceID { engine.releasePairing(deviceID: deviceID, requestID: requestID) }
+        pairing?.exchange?.invalidate()
         send(FloatcutSyncWireMessage(type: "PAIR_REJECT", fields: ["request_id": requestID, "reason": reason]))
         queue.asyncAfter(deadline: .now() + 0.2) { self.cancel() }
     }
 
     private func armPairingTimeout(requestID: String) {
-        queue.asyncAfter(deadline: .now() + 120) { [weak self] in
+        guard let deadline = pairing?.exchange?.deadline, let now = FloatcutSyncBootClock.nowTickMS() else { cancel(); return }
+        let remainingMS = deadline.deadlineTickMS > now ? deadline.deadlineTickMS - now : 0
+        queue.asyncAfter(deadline: .now() + Double(remainingMS) / 1000) { [weak self] in
             guard let self, self.state == .pairing, self.pairing?.requestID == requestID else { return }
             self.sendPairReject(requestID: requestID, reason: "timeout")
         }
@@ -2507,12 +2917,16 @@ private final class FloatcutPeerConnection {
 
     func reconcileLivenessAfterWake() {
         guard !ended, state != .closing else { return }
-        if state == .awaitingHello,
+        if state == .awaitingHello || needsResumeClassification,
            clock.now() >= (attempt?.establishmentDeadline ?? establishmentStartedAt + 15) {
             coordinator?.recordDiagnostic("connection_establishment_timed_out_after_wake", [
                 "direction": direction.diagnosticName
             ])
             cancel()
+            return
+        }
+        if let exchange = pairing?.exchange, state == .pairing, !pairingIsLive(exchange.requestID) {
+            sendPairReject(requestID: exchange.requestID, reason: "timeout")
             return
         }
         if liveness.isExpired(at: clock.now()) {
@@ -2574,7 +2988,8 @@ private final class FloatcutPeerConnection {
     private func handleProtocolError(_ error: FloatcutSyncProtocolError) {
         let code: String
         switch error {
-        case .invalidFrameLength: code = "invalid_frame"
+        case .invalidFrameLength, .incompleteFrame: code = "invalid_frame"
+        case .invalidField, .invalidEnvelope: code = "invalid_field"
         case .invalidUTF8, .invalidJSON, .duplicateJSONKey, .nestingTooDeep, .nonIntegerJSONNumber: code = "invalid_json"
         case .incompatibleVersion: code = "incompatible_version"
         case .unknownMessageType: code = "unknown_message_type"
@@ -2583,12 +2998,11 @@ private final class FloatcutPeerConnection {
         case .invalidState: code = "invalid_state"
         default: code = "invalid_json"
         }
-        let close = code != "unknown_message_type"
-        sendError(code: code, detail: error.localizedDescription, replyTo: nil, close: close)
+        sendError(code: code, detail: "", replyTo: nil, close: true)
     }
 
     private func sendError(code: String, detail: String, replyTo: String?, close: Bool) {
-        var fields: [String: Any] = ["code": code, "detail": String(detail.prefix(160))]
+        var fields: [String: Any] = ["code": code, "detail": ""]
         if let replyTo { fields["reply_to"] = replyTo }
         send(FloatcutSyncWireMessage(type: "ERROR", fields: fields))
         if close {
@@ -2622,27 +3036,21 @@ private final class FloatcutPeerConnection {
 
 private final class FloatcutPairingSession {
     var tlsPublicKeyData: Data?
-    var requestID: String?
-    var initiatorNonce: Data?
-    var acceptorNonce: Data?
-    var transcriptSHA256: String?
-    var localIsInitiator = false
-    var localConfirmed = false
-    var remoteConfirmed = false
-    var complete = false
-
-    init(tlsPublicKeyData: Data?) {
-        self.tlsPublicKeyData = tlsPublicKeyData
+    var exchange: FloatcutSyncPairingV3?
+    var trustGeneration: UInt64 = 0
+    var codePromptPresented = false
+    var requestID: String? { exchange?.requestID }
+    var transcriptSHA256: String? { exchange?.transcript?.sha256 }
+    var localIsInitiator: Bool { exchange?.localIsInitiator ?? false }
+    var complete: Bool { exchange?.phase == .complete }
+    init(tlsPublicKeyData: Data?) { self.tlsPublicKeyData = tlsPublicKeyData }
+    init(exchange: FloatcutSyncPairingV3, tlsPublicKeyData: Data?, trustGeneration: UInt64) {
+        self.exchange = exchange; self.tlsPublicKeyData = tlsPublicKeyData; self.trustGeneration = trustGeneration
     }
-
-    init(pending: FloatcutSyncPendingPairing, tlsPublicKeyData: Data?) {
+    init(pending: FloatcutSyncPendingPairing, tlsPublicKeyData: Data?) throws {
+        exchange = try FloatcutSyncPairingV3(pending: pending)
         self.tlsPublicKeyData = tlsPublicKeyData
-        requestID = pending.requestID
-        transcriptSHA256 = pending.transcriptSHA256
-        localIsInitiator = pending.localIsInitiator ?? false
-        localConfirmed = pending.localConfirmed
-        remoteConfirmed = pending.remoteConfirmed
-        complete = pending.complete
+        trustGeneration = pending.trustGeneration ?? 0
     }
 }
 
@@ -2666,3 +3074,158 @@ private struct FloatcutReplayCache {
         entries.removeAll { $0.1 < cutoff }
     }
 }
+
+#if FLOATCUT_SYNC_COORDINATOR_TESTS
+/// Compiled only into the native coordinator tests. The release app exposes no
+/// alternate trust decisions, transport routing, or test authority API.
+final class FloatcutSyncCoordinatorTestHooks {
+    var clock: FloatcutSyncElapsedClock = FloatcutSyncContinuousClock()
+    var diskWorkers: OperationQueue?
+    var approvePairing: ((String, @escaping (Bool) -> Void) -> Void)?
+    var confirmCode: ((String, String, @escaping (Bool) -> Void) -> Void)?
+    var holdRemoteText: ((@escaping () -> Void) -> Void)?
+    var endControlAfterNextClipboard = false
+    var beforeIncomingAdoption: (() -> Void)?
+    var onWireEvent: ((String, String) -> Void)?
+    var onDiagnostic: ((String, [String: String]) -> Void)?
+}
+
+struct FloatcutSyncCoordinatorTestConnection {
+    let id: UUID
+    let peerDeviceID: String?
+    let trusted: Bool
+    let retired: Bool
+    let inboxHeld: Bool
+    let receivedEOF: Bool
+    let incomingPreHello: Bool
+    let closingOrEnded: Bool
+    let establishmentStartedAt: TimeInterval
+    let transcript: String?
+    let binding: String?
+    let initiator: Bool?
+}
+
+struct FloatcutSyncCoordinatorTestState {
+    let epoch: UInt64
+    let port: NWEndpoint.Port?
+    let contexts: [String: FloatcutFilePeerContext]
+    let generations: [String: UInt64]
+    let enabledDeviceIDs: Set<String>
+    let transfers: [FloatcutFileTransferSnapshot]
+    let connections: [FloatcutSyncCoordinatorTestConnection]
+    let fileEngineReady: Bool
+    let incomingTLSCount: Int
+}
+
+extension FloatcutSyncCoordinator {
+    @nonobjc static func testInstance(defaults: UserDefaults, directory: URL,
+                                     identityStore: FloatcutSyncIdentityStore,
+                                     hooks: FloatcutSyncCoordinatorTestHooks) -> FloatcutSyncCoordinator {
+        let coordinator = FloatcutSyncCoordinator(defaults: defaults, storageDirectory: directory,
+                                                  identityStore: identityStore)
+        coordinator.testHooks = hooks
+        return coordinator
+    }
+    @nonobjc func testState() -> FloatcutSyncCoordinatorTestState? { engine?.testState() }
+    @nonobjc func testDiscover(deviceID: String, name: String, port: NWEndpoint.Port) {
+        engine?.testDiscover(deviceID: deviceID, name: name, port: port)
+    }
+    @nonobjc func testHoldAuthorityQueue() -> () -> Void { engine?.testHoldQueue() ?? {} }
+    @nonobjc func testCaptureQueuedState(_ completion: @escaping (FloatcutSyncCoordinatorTestState) -> Void) {
+        engine?.testCaptureQueuedState(completion)
+    }
+    @nonobjc func testReconcileAfterWake() { engine?.testReconcile() }
+    @nonobjc func testOpenSilentTLS(to port: NWEndpoint.Port) -> NWConnection? { engine?.testOpenSilentTLS(to: port) }
+    @nonobjc func testSendPairingStatuses(to deviceID: String) throws {
+        guard let engine else { throw FloatcutSyncProtocolError.invalidState }
+        try engine.testSendStatuses(to: deviceID)
+    }
+    @nonobjc func testStopAndWait() {
+        engine?.stopAndWait()
+        engine = nil
+        for retired in retiredEngines.values { retired.stopAndWait() }
+        retiredEngines.removeAll()
+    }
+}
+
+private extension FloatcutSyncEngine {
+    func testState() -> FloatcutSyncCoordinatorTestState { queue.sync { testStateLocked() } }
+    func testStateLocked() -> FloatcutSyncCoordinatorTestState {
+        let contexts = Dictionary(uniqueKeysWithValues: connectionsByDeviceID.keys.compactMap { id in
+            fileContext(for: id).map { (id, $0) }
+        })
+        return FloatcutSyncCoordinatorTestState(epoch: epoch, port: listener?.port, contexts: contexts,
+            generations: peerGenerations,
+            enabledDeviceIDs: Set((coordinator?.allPairedPeers() ?? []).filter { $0.enabled }.map { $0.deviceID }),
+            transfers: fileSnapshots,
+            connections: connectionsByID.values.map { $0.testState() },
+            fileEngineReady: fileTransfers.isReady, incomingTLSCount: incomingTLSCandidates.count)
+    }
+    func testDiscover(deviceID: String, name: String, port: NWEndpoint.Port) {
+        queue.sync {
+            let peer = FloatcutDiscoveredPeer(deviceID: deviceID, name: name, platform: "macos",
+                protocolVersion: 3, capabilities: FloatcutSyncProtocol.capabilities, allowsPairing: true,
+                endpoint: .hostPort(host: "127.0.0.1", port: port))
+            discovered[deviceID] = peer
+            discoveryObservations[deviceID] = [peer.endpoint.debugDescription: peer]
+            coordinator?.updateDiscovery(Array(discovered.values), epoch: epoch, revision: nextSnapshotRevision())
+        }
+    }
+    /// A short fail-safe prevents a failed test from stranding shutdown.
+    func testHoldQueue() -> () -> Void {
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        queue.async { entered.signal(); _ = release.wait(timeout: .now() + 10) }
+        _ = entered.wait(timeout: .now() + 3)
+        return { release.signal() }
+    }
+    func testCaptureQueuedState(_ completion: @escaping (FloatcutSyncCoordinatorTestState) -> Void) {
+        queue.async { completion(self.testStateLocked()) }
+    }
+    func testReconcile() {
+        queue.sync {
+            for peer in Array(connectionsByID.values) { peer.reconcileLivenessAfterWake() }
+            fileTransfers.reconcileDeadlines()
+        }
+    }
+    /// Real production TLS options and inbound routing; no HELLO is sent.
+    func testOpenSilentTLS(to port: NWEndpoint.Port) -> NWConnection {
+        queue.sync {
+            let connection = NWConnection(host: "127.0.0.1", port: port,
+                using: makeTLSParameters(channel: "floatcut-sync/3"))
+            connection.start(queue: queue)
+            return connection
+        }
+    }
+    func testSendStatuses(to deviceID: String) throws {
+        try queue.sync {
+            guard let peer = connectionsByDeviceID[deviceID] else { throw FloatcutSyncProtocolError.invalidState }
+            try peer.testSendStatuses()
+        }
+    }
+}
+
+private extension FloatcutPeerConnection {
+    func testState() -> FloatcutSyncCoordinatorTestConnection {
+        FloatcutSyncCoordinatorTestConnection(id: id, peerDeviceID: peerDeviceID,
+            trusted: isTrusted, retired: controlAuthorityRetired,
+            inboxHeld: !clipboardInbox.isEmpty, receivedEOF: receivedEOF,
+            incomingPreHello: isIncomingPreHello, closingOrEnded: isClosingOrEnded, establishmentStartedAt: establishmentStartedAt,
+            transcript: pairing?.exchange?.transcript?.sha256, binding: controlBindingSHA256,
+            initiator: pairing?.exchange?.localIsInitiator)
+    }
+    func testSendStatuses() throws {
+        guard let exchange = pairing?.exchange, let transcript = exchange.transcript else {
+            throw FloatcutSyncProtocolError.invalidState
+        }
+        // Late completed confirmations are idempotent; status replies converge.
+        for state in ["confirmed", "complete", "complete"] {
+            send(FloatcutSyncWireMessage(type: "PAIR_STATUS", fields: [
+                "request_id": exchange.requestID, "transcript_sha256": transcript.sha256, "state": state,
+            ]))
+        }
+        send(FloatcutSyncWireMessage(type: "PAIR_CONFIRM", fields: [
+            "request_id": exchange.requestID, "transcript_sha256": transcript.sha256,
+        ]))
+    }
+}
+#endif

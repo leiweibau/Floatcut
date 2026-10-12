@@ -10,6 +10,7 @@ import SwiftUI
     func statusPopoverController(_ controller: FloatcutStatusPopoverController, didRequestClearFavorites clearFavorites: NSNumber)
     func statusPopoverControllerDidRequestMergeAll(_ controller: FloatcutStatusPopoverController)
     func statusPopoverControllerDidRequestPreferences(_ controller: FloatcutStatusPopoverController)
+    func statusPopoverControllerDidRequestSyncPreferences(_ controller: FloatcutStatusPopoverController)
     func statusPopoverControllerDidRequestAbout(_ controller: FloatcutStatusPopoverController)
     func statusPopoverControllerDidRequestQuit(_ controller: FloatcutStatusPopoverController)
     func statusPopoverControllerDidClose(_ controller: FloatcutStatusPopoverController)
@@ -291,6 +292,18 @@ private struct FloatcutStatusClipRow: View {
     }
 }
 
+private struct FloatcutStatusToolbarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 52, height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.06))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
 private struct FloatcutStatusFooterButton: View {
     let titleKey: LocalizedStringKey
     let role: ButtonRole?
@@ -335,9 +348,12 @@ private struct FloatcutStatusFooterButton: View {
 
 private struct FloatcutStatusPopoverContentView: View {
     @ObservedObject var model: FloatcutStatusPopoverViewModel
+    @ObservedObject private var transfers = FloatcutTransferPresentationCoordinator.shared
     let activate: (Int) -> Void
     let performItemAction: (String) -> Void
     let toggleStore: () -> Void
+    let chooseClient: (FloatcutFileClientTarget) -> Void
+    let syncPreferences: () -> Void
     let clearAll: () -> Void
     let mergeAll: () -> Void
     let preferences: () -> Void
@@ -361,10 +377,49 @@ private struct FloatcutStatusPopoverContentView: View {
                             .frame(width: 32, height: 22)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(FloatcutStatusToolbarButtonStyle())
                     .controlSize(.small)
                     .help(storeToggleHelp)
                     .accessibilityLabel(Text(storeToggleLabelKey))
+
+                    Menu {
+                        if transfers.targets.isEmpty {
+                            Text("No devices have been paired.")
+                            Button("Synchronization settings…", action: syncPreferences)
+                        } else {
+                            ForEach(transfers.targets) { target in
+                                Button { chooseClient(target) } label: {
+                                    Text(clientLabel(target))
+                                }
+                                .disabled(!target.isAvailable)
+                            }
+                        }
+                        if !transfers.transfers.isEmpty {
+                            Divider()
+                            Menu("Transfers…") {
+                                ForEach(transfers.transfers) { transfer in
+                                    Button {
+                                        transfers.reopen(transfer.id)
+                                    } label: {
+                                        Text("\(transfer.fileName) · \(transfer.peerName) — \(FloatcutFileTransferPresentation.phase(transfer))")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "desktopcomputer")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 32, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(FloatcutStatusToolbarButtonStyle())
+                    .menuIndicator(.hidden)
+                    .controlSize(.small)
+                    .fixedSize()
+                    .help(Text("Send a file to a client"))
+                    .accessibilityLabel(Text("Send a file to a client"))
+                    .accessibilityIdentifier("floatcut.fileClients")
                 }
             }
             .padding(.horizontal, 16)
@@ -455,6 +510,16 @@ private struct FloatcutStatusPopoverContentView: View {
     private var storeToggleHelp: String {
         NSLocalizedString(model.isFavoritesStoreActive ? "Show Clipboard" : "Show Favorites", comment: "")
     }
+
+    private func clientLabel(_ target: FloatcutFileClientTarget) -> String {
+        let sameNameCount = transfers.targets.filter { $0.name == target.name }.count
+        let deviceName = sameNameCount > 1 ? "\(target.name) (\(target.id.prefix(8)))" : target.name
+        var label = "\(deviceName) · \(target.platform)"
+        if !target.isAvailable, let reason = target.unavailableReason {
+            label += " — " + FloatcutFileTransferPresentation.reason(reason)
+        }
+        return label
+    }
 }
 
 private struct FloatcutStatusPopoverArrow: Shape {
@@ -473,6 +538,8 @@ private struct FloatcutStatusPopoverPanelView: View {
     let activate: (Int) -> Void
     let performItemAction: (String) -> Void
     let toggleStore: () -> Void
+    let chooseClient: (FloatcutFileClientTarget) -> Void
+    let syncPreferences: () -> Void
     let clearAll: () -> Void
     let mergeAll: () -> Void
     let preferences: () -> Void
@@ -499,6 +566,8 @@ private struct FloatcutStatusPopoverPanelView: View {
                 activate: activate,
                 performItemAction: performItemAction,
                 toggleStore: toggleStore,
+                chooseClient: chooseClient,
+                syncPreferences: syncPreferences,
                 clearAll: clearAll,
                 mergeAll: mergeAll,
                 preferences: preferences,
@@ -545,6 +614,8 @@ private final class FloatcutStatusPanel: NSPanel {
                 activate: { _ in },
                 performItemAction: { _ in },
                 toggleStore: {},
+                chooseClient: { _ in },
+                syncPreferences: {},
                 clearAll: {},
                 mergeAll: {},
                 preferences: {},
@@ -573,6 +644,21 @@ private final class FloatcutStatusPanel: NSPanel {
             toggleStore: { [weak self] in
                 guard let self else { return }
                 self.bridgeDelegate?.statusPopoverControllerDidRequestToggleStore(self)
+            },
+            chooseClient: { [weak self] target in
+                // Allow the Menu gesture to finish before hiding its hosting
+                // panel and opening a separate asynchronous file dialog.
+                DispatchQueue.main.async { [weak self] in
+                    self?.closePopover()
+                    FloatcutTransferPresentationCoordinator.shared.chooseFile(for: target)
+                }
+            },
+            syncPreferences: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.closePopover()
+                    self.bridgeDelegate?.statusPopoverControllerDidRequestSyncPreferences(self)
+                }
             },
             clearAll: { [weak self] in
                 guard let self else { return }

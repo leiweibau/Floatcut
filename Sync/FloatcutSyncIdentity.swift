@@ -389,32 +389,54 @@ enum FloatcutSyncCertificateValidator {
     }
 
     private static func validateProfileDER(_ der: Data, expectedDeviceID: String) -> Bool {
-        guard let root = try? DERReader(data: der).rootSequenceChildren(), root.count == 3,
-              let tbs = try? DERReader(data: root[0].content).children(), tbs.count >= 8,
-              tbs[0].tag == 0xa0,
+        let signatureAlgorithm = DER.sequence(DER.oid([1, 2, 840, 10045, 4, 3, 2]))
+        let publicKeyAlgorithm = DER.sequence(DER.oid([1, 2, 840, 10045, 2, 1]) + DER.oid([1, 2, 840, 10045, 3, 1, 7]))
+        guard FloatcutSyncProtocol.isCanonicalUUID(expectedDeviceID),
+              let root = try? DERReader(data: der).rootSequenceChildren(), root.count == 3,
+              root[0].tag == 0x30, root[2].tag == 0x03,
+              root[1].encoded == signatureAlgorithm,
+              let tbs = try? DERReader(data: root[0].content).children(), tbs.count == 8,
+              tbs[0].encoded == DER.explicit(tagNumber: 0, content: DER.integer(Data([2]))),
+              tbs[1].tag == 0x02, !tbs[1].content.isEmpty, tbs[1].content.count <= 20,
+              tbs[1].content.first! & 0x80 == 0, tbs[1].content.contains(where: { $0 != 0 }),
+              tbs[1].content.count == 1 || tbs[1].content.first != 0 || tbs[1].content.dropFirst().first! & 0x80 != 0,
               tbs[3].encoded == tbs[5].encoded,
+              tbs[3].tag == 0x30,
               tbs[2].encoded == root[1].encoded,
-              let extensionWrapper = tbs.first(where: { $0.tag == 0xa3 }),
+              tbs[6].tag == 0x30,
+              let spki = try? DERReader(data: tbs[6].content).children(), spki.count == 2,
+              spki[0].encoded == publicKeyAlgorithm, spki[1].tag == 0x03,
+              spki[1].content.count == 66, spki[1].content.prefix(2) == Data([0, 4]),
+              tbs[7].tag == 0xa3,
+              let extensionWrapper = tbs.last,
               let extensionSequence = try? DERReader(data: extensionWrapper.content).single(tag: 0x30),
               let extensions = try? DERReader(data: extensionSequence.content).children()
         else { return false }
-
-        var values: [Data: Data] = [:]
-        for item in extensions where item.tag == 0x30 {
-            guard let parts = try? DERReader(data: item.content).children(),
-                  parts.count == 2 || parts.count == 3,
-                  parts[0].tag == 0x06,
-                  let value = parts.last, value.tag == 0x04
-            else { return false }
-            guard values[parts[0].encoded] == nil else { return false }
-            values[parts[0].encoded] = value.content
-        }
 
         let basicOID = DER.oid([2, 5, 29, 19])
         let keyUsageOID = DER.oid([2, 5, 29, 15])
         let extendedKeyUsageOID = DER.oid([2, 5, 29, 37])
         let sanOID = DER.oid([2, 5, 29, 17])
-        guard let basic = values[basicOID],
+        let understood: Set<Data> = [basicOID, keyUsageOID, extendedKeyUsageOID, sanOID]
+        var values: [Data: Data] = [:]
+        var criticalOIDs = Set<Data>()
+        for item in extensions {
+            guard item.tag == 0x30, let parts = try? DERReader(data: item.content).children(),
+                  parts.count == 2 || parts.count == 3,
+                  parts[0].tag == 0x06,
+                  let value = parts.last, value.tag == 0x04
+            else { return false }
+            if parts.count == 3 {
+                guard parts[1].tag == 0x01, parts[1].content == Data([0xff]) else { return false }
+                guard understood.contains(parts[0].encoded) else { return false }
+                criticalOIDs.insert(parts[0].encoded)
+            }
+            guard values[parts[0].encoded] == nil else { return false }
+            values[parts[0].encoded] = value.content
+        }
+
+        guard criticalOIDs.contains(basicOID), criticalOIDs.contains(keyUsageOID),
+              let basic = values[basicOID],
               let basicSequence = try? DERReader(data: basic).single(tag: 0x30),
               let basicParts = try? DERReader(data: basicSequence.content).children(),
               basicParts.isEmpty || (basicParts.count == 1 && basicParts[0].tag == 0x01 && basicParts[0].content == Data([0x00])),
@@ -424,6 +446,7 @@ enum FloatcutSyncCertificateValidator {
               let extended = values[extendedKeyUsageOID],
               let extendedSequence = try? DERReader(data: extended).single(tag: 0x30),
               let extendedParts = try? DERReader(data: extendedSequence.content).children(),
+              extendedParts.count == 2,
               Set(extendedParts.map(\.encoded)) == Set([
                   DER.oid([1, 3, 6, 1, 5, 5, 7, 3, 1]),
                   DER.oid([1, 3, 6, 1, 5, 5, 7, 3, 2]),
@@ -431,7 +454,7 @@ enum FloatcutSyncCertificateValidator {
               let san = values[sanOID],
               let sanSequence = try? DERReader(data: san).single(tag: 0x30),
               let names = try? DERReader(data: sanSequence.content).children(),
-              names.contains(where: {
+              names.count == 1, names.allSatisfy({
                   $0.tag == 0x86 && $0.content == Data("urn:floatcut:device:\(expectedDeviceID)".utf8)
               }),
               validateTenYearValidity(tbs[4])
@@ -447,7 +470,8 @@ enum FloatcutSyncCertificateValidator {
               let notAfter = parseDERTime(parts[1])
         else { return false }
         let days = notAfter.timeIntervalSince(notBefore) / 86_400
-        return days >= 3_650 && days <= 3_654
+        let now = Date()
+        return days >= 3_650 && days <= 3_654 && notBefore <= now && now < notAfter
     }
 
     private static func parseDERTime(_ value: DERTLV) -> Date? {
@@ -458,7 +482,9 @@ enum FloatcutSyncCertificateValidator {
             guard string.count == 13, let shortYear = Int(string.prefix(2)) else { return nil }
             string = String(shortYear >= 50 ? 1900 + shortYear : 2000 + shortYear) + string.dropFirst(2)
             format = "yyyyMMddHHmmss'Z'"
-        case 0x18: format = "yyyyMMddHHmmss'Z'"
+        case 0x18:
+            guard string.count == 15 else { return nil }
+            format = "yyyyMMddHHmmss'Z'"
         default: return nil
         }
         let formatter = DateFormatter()
@@ -466,7 +492,9 @@ enum FloatcutSyncCertificateValidator {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = format
-        return formatter.date(from: string)
+        formatter.isLenient = false
+        guard let date = formatter.date(from: string), formatter.string(from: date) == string else { return nil }
+        return date
     }
 
     private static func verifySelfSignature(certificate: SecCertificate, publicKey: SecKey) -> Bool {
@@ -596,9 +624,11 @@ private struct DERReader {
         if length & 0x80 != 0 {
             let count = length & 0x7f
             guard count > 0, count <= 4, offset + count <= data.count else { throw FloatcutSyncIdentityError.certificateBuild }
+            guard data[offset] != 0 else { throw FloatcutSyncIdentityError.certificateBuild }
             length = 0
             for byte in data[offset..<(offset + count)] { length = (length << 8) | Int(byte) }
             offset += count
+            guard length >= 128 else { throw FloatcutSyncIdentityError.certificateBuild }
         }
         guard length >= 0, offset + length <= data.count else { throw FloatcutSyncIdentityError.certificateBuild }
         let content = data.subdata(in: offset..<(offset + length))
@@ -619,17 +649,19 @@ struct FloatcutSyncPeer: Codable, Identifiable, Equatable {
     var enabled: Bool
     var identityMismatch: Bool
     var allowsOutgoingImages: Bool
+    var trustGeneration: UInt64
     var id: String { deviceID }
 
     private enum CodingKeys: String, CodingKey {
         case deviceID, name, platform, certificateSHA256, certificateDERBase64
         case pairedAtMS, lastSeenMS, capabilities, enabled, identityMismatch, allowsOutgoingImages
+        case trustGeneration
     }
 
     init(deviceID: String, name: String, platform: String, certificateSHA256: String,
          certificateDERBase64: String, pairedAtMS: Int64, lastSeenMS: Int64,
          capabilities: [String], enabled: Bool, identityMismatch: Bool,
-         allowsOutgoingImages: Bool = false) {
+         allowsOutgoingImages: Bool = false, trustGeneration: UInt64 = 1) {
         self.deviceID = deviceID
         self.name = name
         self.platform = platform
@@ -641,6 +673,7 @@ struct FloatcutSyncPeer: Codable, Identifiable, Equatable {
         self.enabled = enabled
         self.identityMismatch = identityMismatch
         self.allowsOutgoingImages = allowsOutgoingImages
+        self.trustGeneration = trustGeneration
     }
 
     init(from decoder: Decoder) throws {
@@ -656,6 +689,7 @@ struct FloatcutSyncPeer: Codable, Identifiable, Equatable {
         enabled = try values.decode(Bool.self, forKey: .enabled)
         identityMismatch = try values.decode(Bool.self, forKey: .identityMismatch)
         allowsOutgoingImages = try values.decodeIfPresent(Bool.self, forKey: .allowsOutgoingImages) ?? false
+        trustGeneration = try values.decodeIfPresent(UInt64.self, forKey: .trustGeneration) ?? 0
     }
 }
 
@@ -670,6 +704,56 @@ struct FloatcutSyncPendingPairing: Codable, Equatable {
     var localConfirmed: Bool
     var remoteConfirmed: Bool
     var complete: Bool
+    var bootDeadline: FloatcutSyncBootDeadline?
+    var originalControlBindingSHA256: String?
+    var initiatorDeviceID: String?
+    var initiatorCertificateSHA256: String?
+    var acceptorDeviceID: String?
+    var acceptorCertificateSHA256: String?
+    var initiatorCommitmentSHA256: String?
+    var acceptorCommitmentSHA256: String?
+    var trustGeneration: UInt64?
+
+    init(requestID: String, peerDeviceID: String, peerCertificateSHA256: String,
+         peerCertificateDERBase64: String, transcriptSHA256: String, expiresAtMS: Int64,
+         localIsInitiator: Bool?, localConfirmed: Bool, remoteConfirmed: Bool, complete: Bool,
+         bootDeadline: FloatcutSyncBootDeadline? = nil, originalControlBindingSHA256: String? = nil,
+         initiatorDeviceID: String? = nil, initiatorCertificateSHA256: String? = nil,
+         acceptorDeviceID: String? = nil, acceptorCertificateSHA256: String? = nil,
+         initiatorCommitmentSHA256: String? = nil, acceptorCommitmentSHA256: String? = nil,
+         trustGeneration: UInt64? = nil) {
+        self.requestID = requestID; self.peerDeviceID = peerDeviceID
+        self.peerCertificateSHA256 = peerCertificateSHA256; self.peerCertificateDERBase64 = peerCertificateDERBase64
+        self.transcriptSHA256 = transcriptSHA256; self.expiresAtMS = expiresAtMS
+        self.localIsInitiator = localIsInitiator; self.localConfirmed = localConfirmed
+        self.remoteConfirmed = remoteConfirmed; self.complete = complete
+        self.bootDeadline = bootDeadline; self.originalControlBindingSHA256 = originalControlBindingSHA256
+        self.initiatorDeviceID = initiatorDeviceID; self.initiatorCertificateSHA256 = initiatorCertificateSHA256
+        self.acceptorDeviceID = acceptorDeviceID; self.acceptorCertificateSHA256 = acceptorCertificateSHA256
+        self.initiatorCommitmentSHA256 = initiatorCommitmentSHA256; self.acceptorCommitmentSHA256 = acceptorCommitmentSHA256
+        self.trustGeneration = trustGeneration
+    }
+
+    func isValidSameBoot(nowTickMS: UInt64? = FloatcutSyncBootClock.nowTickMS(),
+                        bootGeneration: String? = FloatcutSyncBootClock.generation()) -> Bool {
+        guard let bootDeadline, let localIsInitiator, let trustGeneration, trustGeneration > 0,
+              let binding = originalControlBindingSHA256,
+              let initiatorID = initiatorDeviceID, let initiatorPin = initiatorCertificateSHA256,
+              let acceptorID = acceptorDeviceID, let acceptorPin = acceptorCertificateSHA256,
+              let initiatorCommitment = initiatorCommitmentSHA256, let acceptorCommitment = acceptorCommitmentSHA256,
+              FloatcutSyncProtocol.isCanonicalUUID(requestID),
+              FloatcutSyncProtocol.isCanonicalUUID(initiatorID), FloatcutSyncProtocol.isCanonicalUUID(acceptorID),
+              FloatcutSyncProtocol.isCanonicalUUID(peerDeviceID),
+              initiatorID != acceptorID,
+              peerDeviceID == (localIsInitiator ? acceptorID : initiatorID),
+              peerCertificateSHA256 == (localIsInitiator ? acceptorPin : initiatorPin),
+              [binding, initiatorPin, acceptorPin, initiatorCommitment, acceptorCommitment, transcriptSHA256, peerCertificateSHA256]
+                .allSatisfy({ (try? FloatcutSyncProtocol.dataFromHex($0, expectedBytes: 32)) != nil }),
+              !complete || localConfirmed && remoteConfirmed
+        else { return false }
+        return bootDeadline.isValid(durationMS: complete ? 600_000 : 120_000,
+                                    nowTickMS: nowTickMS, bootGeneration: bootGeneration)
+    }
 }
 
 struct FloatcutSyncRevocation: Codable, Identifiable, Equatable {
@@ -678,7 +762,29 @@ struct FloatcutSyncRevocation: Codable, Identifiable, Equatable {
     let revocationID: String
     let revokedAtMS: Int64
     var acknowledged: Bool
+    var trustGeneration: UInt64
     var id: String { revocationID }
+
+    private enum CodingKeys: String, CodingKey {
+        case peerDeviceID, certificateSHA256, revocationID, revokedAtMS, acknowledged, trustGeneration
+    }
+
+    init(peerDeviceID: String, certificateSHA256: String, revocationID: String,
+         revokedAtMS: Int64, acknowledged: Bool, trustGeneration: UInt64 = 1) {
+        self.peerDeviceID = peerDeviceID; self.certificateSHA256 = certificateSHA256
+        self.revocationID = revocationID; self.revokedAtMS = revokedAtMS
+        self.acknowledged = acknowledged; self.trustGeneration = trustGeneration
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        peerDeviceID = try values.decode(String.self, forKey: .peerDeviceID)
+        certificateSHA256 = try values.decode(String.self, forKey: .certificateSHA256)
+        revocationID = try values.decode(String.self, forKey: .revocationID)
+        revokedAtMS = try values.decode(Int64.self, forKey: .revokedAtMS)
+        acknowledged = try values.decode(Bool.self, forKey: .acknowledged)
+        trustGeneration = try values.decodeIfPresent(UInt64.self, forKey: .trustGeneration) ?? 0
+    }
 }
 
 final class FloatcutSyncPersistentStore<Record: Codable> {
@@ -687,8 +793,8 @@ final class FloatcutSyncPersistentStore<Record: Codable> {
     private var records: [Record] = []
     private var loadFailed = false
 
-    init(fileName: String) {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    init(fileName: String, baseDirectory: URL? = nil) {
+        let base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("de.meierkarsten.floatcut", isDirectory: true)
             .appendingPathComponent("Sync", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -706,6 +812,7 @@ final class FloatcutSyncPersistentStore<Record: Codable> {
     }
 
     func read() -> [Record] { queue.sync { records } }
+    var isHealthy: Bool { queue.sync { !loadFailed } }
 
     func replace(_ newRecords: [Record]) throws {
         try queue.sync {

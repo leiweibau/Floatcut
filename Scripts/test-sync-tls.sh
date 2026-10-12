@@ -11,6 +11,7 @@ mkdir -p "${BUILD_DIR}"
 cd "${ROOT_DIR}"
 xcrun swiftc \
   Sync/FloatcutSyncProtocol.swift \
+  Sync/FloatcutSyncLifecycle.swift \
   Sync/FloatcutSyncIdentity.swift \
   Tests/SyncTLSTests/main.swift \
   -framework Network \

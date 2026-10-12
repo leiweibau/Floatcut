@@ -47,4 +47,18 @@ let epoch2 = gate.beginEpoch()
 expect(!gate.accepts(epoch: epoch1, revision: 2), "stale engine snapshot accepted")
 expect(gate.accepts(epoch: epoch2, revision: 1), "new epoch snapshot rejected")
 
+
+let bootGeneration = "11223344-5566-4788-99aa-bbccddeeff00"
+let fixedDeadline = FloatcutSyncBootDeadline.starting(durationMS: 120_000, nowTickMS: 5_000, bootGeneration: bootGeneration)!
+expect(fixedDeadline.isValid(durationMS: 120_000, nowTickMS: 5_000, bootGeneration: bootGeneration), "request start invalid")
+let restoredDeadline = try JSONDecoder().decode(FloatcutSyncBootDeadline.self, from: JSONEncoder().encode(fixedDeadline))
+expect(restoredDeadline.isValid(durationMS: 120_000, nowTickMS: 124_999, bootGeneration: bootGeneration), "same-boot process restart lost valid deadline")
+expect(!restoredDeadline.isValid(durationMS: 120_000, nowTickMS: 125_000, bootGeneration: bootGeneration), "deadline equality must expire")
+expect(!restoredDeadline.isValid(durationMS: 120_000, nowTickMS: 4_999, bootGeneration: bootGeneration), "clock rollback renewed deadline")
+expect(!restoredDeadline.isValid(durationMS: 120_000, nowTickMS: 6_000, bootGeneration: UUID().uuidString.lowercased()), "new boot resumed old pairing")
+expect(!restoredDeadline.isValid(durationMS: 120_000, nowTickMS: 6_000, bootGeneration: nil), "missing boot marker resumed old pairing")
+expect(!restoredDeadline.isValid(durationMS: 600_000, nowTickMS: 6_000, bootGeneration: bootGeneration), "corrupt duration accepted")
+expect(FloatcutSyncBootDeadline.starting(durationMS: 120_000, nowTickMS: UInt64.max - 1, bootGeneration: bootGeneration) == nil, "overflowing deadline accepted")
+expect(FloatcutSyncBootClock.nowTickMS() != nil && FloatcutSyncBootClock.generation() != nil, "native boot clock unavailable")
+
 print("Sync lifecycle tests passed")

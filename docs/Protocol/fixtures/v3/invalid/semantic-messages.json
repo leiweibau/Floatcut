@@ -1,0 +1,165 @@
+[
+  {
+    "name": "non-nfc-filename",
+    "check": "filename",
+    "message": {
+      "v": 3,
+      "type": "FILE_OFFER",
+      "message_id": "10000000-0000-4000-8000-00000000000d",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "target_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+      "file_name": "cafe\u0301.txt",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+    }
+  },
+  {
+    "name": "filename-over-180-utf8-bytes",
+    "check": "filename",
+    "message": {
+      "v": 3,
+      "type": "FILE_OFFER",
+      "message_id": "10000000-0000-4000-8000-00000000000d",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "target_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+      "file_name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+    }
+  },
+  {
+    "name": "unsorted-capabilities",
+    "check": "hello",
+    "message": {
+      "v": 3,
+      "type": "HELLO",
+      "message_id": "10000000-0000-4000-8000-000000000001",
+      "device_id": "00112233-4455-4677-8899-aabbccddeeff",
+      "device_name": "Initiator",
+      "platform": "windows",
+      "capabilities": [
+        "file.transfer.v1",
+        "clip.text.utf8",
+        "clip.image.png",
+        "clip.image.jpeg"
+      ],
+      "certificate_sha256": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "session_nonce": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"
+    }
+  },
+  {
+    "name": "device-name-over-64-utf8-bytes",
+    "check": "hello",
+    "message": {
+      "v": 3,
+      "type": "HELLO",
+      "message_id": "10000000-0000-4000-8000-000000000001",
+      "device_id": "00112233-4455-4677-8899-aabbccddeeff",
+      "device_name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "platform": "windows",
+      "capabilities": [
+        "clip.image.jpeg",
+        "clip.image.png",
+        "clip.text.utf8",
+        "file.transfer.v1"
+      ],
+      "certificate_sha256": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "session_nonce": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"
+    }
+  },
+  {
+    "name": "error-detail-over-128-utf8-bytes",
+    "check": "error",
+    "message": {
+      "v": 3,
+      "type": "ERROR",
+      "message_id": "10000000-0000-4000-8000-00000000001f",
+      "code": "invalid_state",
+      "detail": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+    }
+  },
+  {
+    "name": "offer-hash-mismatch",
+    "check": "manifest",
+    "message": {
+      "v": 3,
+      "type": "FILE_OFFER",
+      "message_id": "10000000-0000-4000-8000-00000000000d",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "target_device_id": "ffeeddcc-bbaa-4988-b766-554433221100",
+      "file_name": "report.txt",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "offer_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  {
+    "name": "wrong-target-identity",
+    "check": "manifest",
+    "message": {
+      "v": 3,
+      "type": "FILE_OFFER",
+      "message_id": "10000000-0000-4000-8000-00000000000d",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "target_device_id": "00112233-4455-4677-8899-aabbccddeeff",
+      "file_name": "report.txt",
+      "byte_size": 3,
+      "content_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8"
+    }
+  },
+  {
+    "name": "progress-exceeds-offered-size",
+    "check": "progress",
+    "message": {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000100",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 4,
+      "phase": "receiving"
+    }
+  },
+  {
+    "name": "progress-committing-before-complete-size",
+    "check": "progress",
+    "message": {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000100",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 0,
+      "phase": "committing"
+    }
+  },
+  {
+    "name": "progress-wrong-offer-hash",
+    "check": "progress",
+    "message": {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000100",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "received_bytes": 0,
+      "phase": "receiving"
+    }
+  },
+  {
+    "name": "progress-partial-record-counter",
+    "check": "progress",
+    "message": {
+      "v": 3,
+      "type": "FILE_PROGRESS",
+      "message_id": "10000000-0000-4000-8000-000000000100",
+      "transfer_id": "22334455-6677-4899-aabb-ccddeeff0011",
+      "offer_sha256": "00391de54fc3779c06894d716dd409d0dfaec13be6e7d38f4360f8dc734507d8",
+      "received_bytes": 1,
+      "phase": "receiving"
+    }
+  }
+]

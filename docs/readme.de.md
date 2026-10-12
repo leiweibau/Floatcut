@@ -8,7 +8,7 @@
 
 Floatcut ist ein schlanker Zwischenablage-Manager für macOS. Die App führt einen durchsuchbaren lokalen Verlauf kopierter Texte und Bilder, bietet einen getrennten Favoritenspeicher und kann neue Clips direkt mit gekoppelten Geräten im lokalen Netzwerk austauschen.
 
-**Aktuelle Version:** 4.0<br>
+**Aktuelle Version:** 4.5.0<br>
 **Bedienungsanleitung:** [Deutsch](bedienung.md) · [English](user-guide.md)
 
 <p align="center">
@@ -36,8 +36,8 @@ Floatcut ist ein schlanker Zwischenablage-Manager für macOS. Die App führt ein
 ## Installation
 
 1. `Floatcut.app` nach `/Applications` kopieren.
-2. Floatcut starten. Da Entwicklungs- und Release-Bundles lokal beziehungsweise ad hoc signiert und nicht notarisiert sind, kann macOS den ersten Start blockieren.
-3. Falls erforderlich, unter **Systemeinstellungen → Datenschutz & Sicherheit** die Option **Trotzdem öffnen** wählen.
+2. Floatcut starten. Offizielle Developer-ID-signierte und notarisierte Releases sollten sich normal öffnen lassen; lokale Entwicklungs-Builds können von macOS blockiert werden.
+3. Nur bei einem vertrauenswürdigen lokalen Build gegebenenfalls unter **Systemeinstellungen → Datenschutz & Sicherheit** die Option **Trotzdem öffnen** wählen.
 4. Die Bedienungshilfen-Berechtigung erteilen, wenn Floatcut ausgewählte Clips automatisch einfügen soll.
 
 Hinweise zu Gatekeeper und Bedienungshilfen für vertrauenswürdige lokale Builds enthält die englische Dokumentation [Release setup](RELEASE_SETUP.md). Gatekeeper sollte nicht global deaktiviert werden.
@@ -61,7 +61,7 @@ Nach der Installation von Xcode erzeugt dieser Befehl ein universelles Release-A
 bash Scripts/package-app.sh
 ```
 
-Die Ergebnisse sind `dist/Floatcut.app` und `dist/Floatcut_universal_<Version>.dmg` (aktuell `Floatcut_universal_4.0.dmg`). Das Skript verwendet nach Möglichkeit die stabile lokale Signierungsidentität `Floatcut Local Development` und fällt sonst auf eine Ad-hoc-Signatur zurück. Weitere Details stehen unter [Release setup](RELEASE_SETUP.md).
+Die Ergebnisse sind `dist/Floatcut.app` und `dist/Floatcut_universal_<Version>.dmg` (aktuell `Floatcut_universal_4.5.0.dmg`). Dieser lokale Build ist **nicht notarisiert**. Offizielle Releases werden mit `Scripts/package-notarized-app.sh`, einer Developer-ID-Application-Identität und Apple-Notarisierungsdaten erstellt; siehe [Release setup](RELEASE_SETUP.md).
 
 ## Datenschutz und Datenspeicherung
 

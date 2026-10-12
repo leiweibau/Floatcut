@@ -84,6 +84,13 @@
 		S20000062EB2000100000001 /* FloatcutSyncLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = S20000162EB2000100000001 /* FloatcutSyncLifecycle.swift */; };
 		S20000042EB2000100000001 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = S20000142EB2000100000001 /* Network.framework */; };
 		S20000052EB2000100000001 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = S20000152EB2000100000001 /* Security.framework */; };
+		59F60B67752F8B04308F36D9 /* FloatcutSyncPairingV3.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C89687D0FC5117B45043DD /* FloatcutSyncPairingV3.swift */; };
+		218078C41981119509C0A378 /* FloatcutFileTransferModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDB1966582D3CA3C15FCE056 /* FloatcutFileTransferModel.swift */; };
+		1542B7D16B12321DF662F58B /* FloatcutFileTransferEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C11EAE31C0C5AA39C29AD09 /* FloatcutFileTransferEngine.swift */; };
+		7E2CAD57B48D1BE9DBDE7360 /* FloatcutFileDataConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F853AC40A8E1FFBE3E6252A4 /* FloatcutFileDataConnection.swift */; };
+		024BDD1800F93CE53BB74ABD /* FloatcutFileStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6553EB5E59580D8944676A /* FloatcutFileStorage.swift */; };
+		F3884CEAC534E5AE4D99F962 /* FloatcutFileTransferJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74523848F27806D0BB70C02B /* FloatcutFileTransferJournal.swift */; };
+		E5F4C633149D84DC41F1FFD1 /* FloatcutTransferWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9773250C0E64A68DBE46F5 /* FloatcutTransferWindowController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */		77AE730823D2D49100F6A44B /* Embed Frameworks */ = {
@@ -190,6 +197,13 @@
 		S20000162EB2000100000001 /* FloatcutSyncLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncLifecycle.swift; sourceTree = "<group>"; };
 		S20000142EB2000100000001 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
 		S20000152EB2000100000001 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		57C89687D0FC5117B45043DD /* FloatcutSyncPairingV3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutSyncPairingV3.swift; sourceTree = "<group>"; };
+		BDB1966582D3CA3C15FCE056 /* FloatcutFileTransferModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutFileTransferModel.swift; sourceTree = "<group>"; };
+		1C11EAE31C0C5AA39C29AD09 /* FloatcutFileTransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutFileTransferEngine.swift; sourceTree = "<group>"; };
+		F853AC40A8E1FFBE3E6252A4 /* FloatcutFileDataConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutFileDataConnection.swift; sourceTree = "<group>"; };
+		5A6553EB5E59580D8944676A /* FloatcutFileStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutFileStorage.swift; sourceTree = "<group>"; };
+		74523848F27806D0BB70C02B /* FloatcutFileTransferJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutFileTransferJournal.swift; sourceTree = "<group>"; };
+		AB9773250C0E64A68DBE46F5 /* FloatcutTransferWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatcutTransferWindowController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -220,6 +234,7 @@
 				F10000192EB1000100000001 /* FloatcutBezelContentView.swift */,
 				F100001A2EB1000100000001 /* FloatcutMenuItemView.swift */,
 				F100001B2EB1000100000001 /* FloatcutStatusPopoverController.swift */,
+				AB9773250C0E64A68DBE46F5 /* FloatcutTransferWindowController.swift */,
 				A30000122EB2000100000001 /* FloatcutThumbnailService.swift */,
 				F10000182EB1000100000001 /* FloatcutPreferencesWindowController.swift */,
 				F10000132EB1000100000001 /* FloatcutSearchWindowController.swift */,
@@ -238,6 +253,12 @@
 			isa = PBXGroup;
 			children = (
 				S20000112EB2000100000001 /* FloatcutSyncProtocol.swift */,
+				74523848F27806D0BB70C02B /* FloatcutFileTransferJournal.swift */,
+				5A6553EB5E59580D8944676A /* FloatcutFileStorage.swift */,
+				F853AC40A8E1FFBE3E6252A4 /* FloatcutFileDataConnection.swift */,
+				1C11EAE31C0C5AA39C29AD09 /* FloatcutFileTransferEngine.swift */,
+				BDB1966582D3CA3C15FCE056 /* FloatcutFileTransferModel.swift */,
+				57C89687D0FC5117B45043DD /* FloatcutSyncPairingV3.swift */,
 				A30000112EB2000100000001 /* FloatcutSyncWork.swift */,
 				S20000122EB2000100000001 /* FloatcutSyncIdentity.swift */,
 				S20000132EB2000100000001 /* FloatcutSyncCoordinator.swift */,
@@ -542,6 +563,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				S20000012EB2000100000001 /* FloatcutSyncProtocol.swift in Sources */,
+				E5F4C633149D84DC41F1FFD1 /* FloatcutTransferWindowController.swift in Sources */,
+				F3884CEAC534E5AE4D99F962 /* FloatcutFileTransferJournal.swift in Sources */,
+				024BDD1800F93CE53BB74ABD /* FloatcutFileStorage.swift in Sources */,
+				7E2CAD57B48D1BE9DBDE7360 /* FloatcutFileDataConnection.swift in Sources */,
+				1542B7D16B12321DF662F58B /* FloatcutFileTransferEngine.swift in Sources */,
+				218078C41981119509C0A378 /* FloatcutFileTransferModel.swift in Sources */,
+				59F60B67752F8B04308F36D9 /* FloatcutSyncPairingV3.swift in Sources */,
 				A30000012EB2000100000001 /* FloatcutSyncWork.swift in Sources */,
 				S20000022EB2000100000001 /* FloatcutSyncIdentity.swift in Sources */,
 				S20000032EB2000100000001 /* FloatcutSyncCoordinator.swift in Sources */,
@@ -658,9 +686,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4.0.1;
+				CURRENT_PROJECT_VERSION = 4.5.0;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 9478A8FXT3;
+				DEVELOPMENT_TEAM = Q63463D699;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
@@ -686,7 +714,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
-				MARKETING_VERSION = 4.0.1;
+				MARKETING_VERSION = 4.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = de.meierkarsten.floatcut;
 				PRODUCT_MODULE_NAME = Floatcut;
 				PRODUCT_NAME = Floatcut;
@@ -713,9 +741,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4.0.1;
+				CURRENT_PROJECT_VERSION = 4.5.0;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 9478A8FXT3;
+				DEVELOPMENT_TEAM = Q63463D699;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
@@ -738,7 +766,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
-				MARKETING_VERSION = 4.0.1;
+				MARKETING_VERSION = 4.5.0;
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = de.meierkarsten.floatcut;
 				PRODUCT_MODULE_NAME = Floatcut;
